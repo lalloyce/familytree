@@ -1,0 +1,9 @@
+name: invite_spike
+description: Spike 3, offline invite. code.dart graduates to M3, the rest is throwaway.
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+dev_dependencies:
+  test: any
