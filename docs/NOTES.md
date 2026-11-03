@@ -27,16 +27,16 @@ flutter test
 
 ## Decisions
 
-Plan decisions A to H fill gaps in the design. Task 7 writes them into the design document (section 13) so the founder can accept or change them.
+Plan decisions A to H fill gaps in the design. Task 7 wrote decisions A to G into the design document (section 13) and Task 13b wrote H, so the founder can accept or change them.
 
 - **A.** `person` gets a nullable `sex` ("son of" versus "daughter of"; unknown reads "child of"). The design's table sketch has no such field.
 - **B.** `house` gets a nullable `ordinal` (house 2). A house can exist with a known number and an unknown wife ("houses 1 and 3 are unknown").
 - **C.** A wife's membership is a `wifeOfHouse` claim (displayed "married"). `belongsToHouse` carries only the basis `bornTo` or `joined`. This keeps "child of one house" single-valued and "wife of several houses" multi-valued.
-- **D.** One person replacing another person's claim never supersedes it. Both stay active and show "Accounts differ". Only the same asserter, with the current claim as their base, supersedes their own claim. This follows the anti-goal that persistence must not win by volume.
+- **D.** One account replacing another account's claim never supersedes it: both stay active and show "Accounts differ". `baseClaimId` supersedes the claim it names only when that claim is active, of the same kind, asserted by the same account, and on the same contest key or about the same subject. Any other base is stale: nothing is superseded and no error is raised. The same-subject rule lets one account move a wife from one house to another (a wife claim contests by house). "Competing" means active claims on one contest key hold more than one distinct content (subject, object, basis, body); accounts that agree on all four are not a dispute. This follows the anti-goal that persistence must not win by volume.
 - **E.** When a person's parentage is disputed or cyclic, the chain stops at that person with "accounts differ".
 - **F.** In M1 a `joined` basis displays as the neutral "belongs to". Showing the word "joined" waits for audience rules in M4. This settles the design's "known tension" for M1 only.
 - **G.** `person_name(person_id, name, kind)` holds spelling variants and extra names (design edge case 12). `person.name_key` is the primary display name.
-- **H.** In M1 the person who is "me" is kept in a local, never-synced `app_setting` row (Drift table `AppSettings`); from M2 it comes from the link between the account and its person.
+- **H.** In M1 the person who is "me" is kept in a local, never-synced `app_settings` row (Drift table `AppSettings`); from M2 it comes from the link between the account and its person.
 
 Setup decisions (Task 0):
 
@@ -123,8 +123,23 @@ Awaiting the founder:
 2. Task 1: paper test with relatives. The founder runs it. The script is `docs/paper-test.md`. No interviews are recorded yet.
 3. Name the weakest test phone and record its model, RAM and Android version above. It unlocks the spike 3 on-device matrix, the spike 4 layout and frame timing, and the spike 5 cold start, update survival and backup and restore. Procedures are in each spike's README.
 4. Task 13 step 5: run the app on the weakest phone and enter your own first-run household by hand, then note anything awkward here. The app is prepared (`cd app && flutter run`); this has not been done.
+
+   Warning before you do. `app/lib/main.dart` opens an unencrypted database (encryption is a later milestone). `app/android/app/src/main/AndroidManifest.xml` sets no `android:allowBackup` attribute (read on 2026-11-03), so the app keeps Android's default for it, which is to allow backup; I did not change the manifest. The household names you type may therefore be included in Android's cloud backup. What you type is M1 data: M2 will have to move or reset it.
 5. Task 14 step 5: the 3,000-person run on the phone (see Scale check above).
+6. Open questions on choices made in M1. Answer each, or accept it as it is:
+   1. Decision E has no stated reason in the plan. Supply one, or accept it as it is.
+   2. When two accounts name the same house but differ only on basis (joined versus born to), the chain stops with "accounts differ". Keep that, or treat the two as agreeing for ancestry?
+   3. The app shows wording the design did not specify: "wife not known yet", "born to this house", "belongs to this house", and ", same person, accounts differ" for a contested placement. Accept it or change it?
+   4. "20 women who appear in two houses" can be read two ways. Both readings were built (see Scale check above). Which did you mean?
+   5. When the father is not known at first run, he shows as a dashed "someone we forgot" in both the chain and the houses view. Is that what you want?
 
 Next: the founder reviews `docs/spike-results.md` and answers its open questions, then M2 to M6 are planned from it. The M2 to M6 plan is not written yet; the plan says it is written only after that review.
 
-M2 must do first: M1 claims are written with `assertedBy = 'local'` (`localAccountId` in `app/lib/app.dart`), and people and houses with `createdBy = 'local'`. Before the first edit or sync, M2 must, in one transaction, rewrite `'local'` to the real account id in `persons.createdBy`, `houses.createdBy`, `claims.assertedBy` and `field_edits.assertedBy`, and link the account to its person. Otherwise a user's own M1 claims read as another account's (decision D) and would show "accounts differ" against themselves. The id `'local'` must never be uploaded.
+M2 must do first: M1 claims are written with `assertedBy = 'local'` (`localAccountId` in `app/lib/app.dart`), and people and houses with `createdBy = 'local'`. Before the first edit or sync, M2 must, in one transaction, rewrite `'local'` to the real account id in `persons.createdBy`, `houses.createdBy`, `claims.assertedBy` and `field_edits.assertedBy`, and link the account to its person. Otherwise a user's own M1 claims read as another account's (decision D) and would show "accounts differ" against themselves. The id `'local'` must never be uploaded. M2 must also move or reset the unencrypted M1 database file, and bump the Drift schema version with a migration, because the app now writes to a database at schema version 1.
+
+## Known limits at M1 exit
+
+- `localSeq` is local to each device, so "earliest by arrival" can differ between devices after M2 sync.
+- The houses of the aunt's husbands are not reachable from the app in M1: the family tab shows only the father's houses. The case is covered at model and widget level.
+- A chain longer than the 60-step cap ends with a last line that reads "son of someone we forgot". This is known and unlikely.
+

@@ -68,9 +68,12 @@ class ClaimService {
   /// [ArgumentError] for a `wifeOfHouse` claim without [objectId].
   ///
   /// [baseClaimId] names the claim being replaced. It supersedes that claim
-  /// only when the claim is active, on the same contest key, and asserted by
-  /// this account. Any other base is stale: nothing is superseded and the new
-  /// claim stands beside the existing ones.
+  /// only when the claim is active, of the same kind, asserted by this
+  /// account, and on the same contest key or about the same subject (decision
+  /// D). The subject rule lets an account move a wife from one house to
+  /// another, although a `wifeOfHouse` claim contests by house. Any other base
+  /// is stale: nothing is superseded and the new claim stands beside the
+  /// existing ones.
   Future<ClaimRow> assertClaim({
     required ClaimKind kind,
     required String subjectId,
@@ -85,7 +88,7 @@ class ClaimService {
         for (final c in await _activeOfKind(_db, kind)) {
           if (c.id == baseClaimId &&
               c.assertedBy == accountId &&
-              contestKeyOfRow(c) == key) {
+              (contestKeyOfRow(c) == key || c.subjectId == subjectId)) {
             await (_db.update(
               _db.claims,
             )..where((t) => t.id.equals(c.id))).write(

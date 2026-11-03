@@ -86,6 +86,70 @@ void main() {
     expect(lines.every((l) => !l.disputed && !l.placeholder), isTrue);
   });
 
+  test(
+    'only the last Winyo line says its father is someone we forgot',
+    () async {
+      final WinyoFamily f = await buildWinyoFamily(db);
+
+      final lines = await spokenChain(db, f.me);
+
+      expect(lines.map((l) => l.fatherPlaceholder), [
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+      ]);
+      expect(lines.last.personId, f.winyoElder);
+      // The words stay as they were.
+      expect(lines.last.text, 'Winyo, son of someone we forgot');
+    },
+  );
+
+  test('a father is marked when he is a placeholder with a line of his own, '
+      'or when there is no father at all', () async {
+    final String kid = await alice.addPerson(name: 'Kid', sex: Sex.male);
+    final String ghost = await alice.addPlaceholder(sex: Sex.male);
+    final String grand = await alice.addPerson(name: 'Grand', sex: Sex.male);
+    await placeUnder(alice, kid, ghost);
+    await placeUnder(alice, ghost, grand);
+    final String lone = await alice.addPerson(name: 'Lone');
+
+    final lines = await spokenChain(db, kid);
+    final alone = await spokenChain(db, lone);
+
+    expect(shape(lines), [
+      (kid, 'Kid, son of someone we forgot', false, false),
+      (ghost, 'someone we forgot, son of Grand', false, true),
+      (grand, 'Grand, son of someone we forgot', false, false),
+    ]);
+    // The line about the placeholder is outlined as a whole; only the lines
+    // that name him as a father are marked.
+    expect(lines.map((l) => l.fatherPlaceholder), [true, false, true]);
+    expect(alone.single.text, 'Lone, child of someone we forgot');
+    expect(alone.single.fatherPlaceholder, isTrue);
+  });
+
+  test('a disputed end and a named father are not marked', () async {
+    final String kid = await alice.addPerson(name: 'Kid');
+    final String fa = await alice.addPerson(name: 'Fa', sex: Sex.male);
+    final String fb = await bob.addPerson(name: 'Fb', sex: Sex.male);
+    await placeUnder(alice, kid, fa);
+    await placeUnder(bob, kid, fb);
+    final String solo = await alice.addPerson(name: 'Solo');
+    final String dad = await alice.addPerson(name: 'Dad', sex: Sex.male);
+    await placeUnder(alice, solo, dad, basis: Basis.joined);
+
+    final disputed = await spokenChain(db, kid);
+    final joined = await spokenChain(db, solo);
+
+    expect(disputed.single.text, 'Kid, accounts differ');
+    expect(disputed.single.fatherPlaceholder, isFalse);
+    expect(joined.first.text, "Solo, belongs to Dad's house");
+    expect(joined.first.fatherPlaceholder, isFalse);
+  });
+
   test('the two Winyos are told apart by their father', () async {
     final WinyoFamily f = await buildWinyoFamily(db);
 

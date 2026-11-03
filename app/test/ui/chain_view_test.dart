@@ -12,11 +12,13 @@ ChainLine line(
   String id = 'p',
   bool disputed = false,
   bool placeholder = false,
+  bool fatherPlaceholder = false,
 }) => ChainLine(
   personId: id,
   text: text,
   disputed: disputed,
   placeholder: placeholder,
+  fatherPlaceholder: fatherPlaceholder,
 );
 
 void main() {
@@ -87,6 +89,125 @@ void main() {
     expect(dashes.computeMetrics().length, greaterThan(8));
     // And it is really painted.
     expect(tester.renderObject(outline), paints..path(color: painter.color));
+  });
+
+  testWidgets('a forgotten father is outlined inside the line, and the line '
+      'still reads as one piece of text', (tester) async {
+    final SemanticsHandle semantics = tester.ensureSemantics();
+    await pumpApp(
+      tester,
+      ChainView(
+        lines: [
+          line(
+            'Winyo, son of someone we forgot',
+            id: 'w',
+            fatherPlaceholder: true,
+          ),
+          line('Juma, son of Manyi', id: 'j'),
+          line(
+            "Obuolo, belongs to someone we forgot's house",
+            id: 'o',
+            fatherPlaceholder: true,
+          ),
+        ],
+      ),
+    );
+
+    final Finder span = find.byKey(ChainView.forgottenSpanKey(0));
+    expect(span, findsOneWidget);
+    expect(find.byKey(ChainView.forgottenSpanKey(1)), findsNothing);
+    expect(find.byKey(ChainView.forgottenSpanKey(2)), findsOneWidget);
+    // No whole-line outline: the person on the line is not a placeholder.
+    expect(find.byKey(ChainView.placeholderKey(0)), findsNothing);
+    // The text is one widget, unchanged and complete.
+    expect(find.text('Winyo, son of someone we forgot'), findsOneWidget);
+    expect(find.text('someone we forgot'), findsNothing);
+    expect(
+      tester.getSemantics(find.text('Winyo, son of someone we forgot')).label,
+      'Winyo, son of someone we forgot',
+    );
+    // The outline is really painted, as separate dashes, in the outline
+    // colour, and only around the words, not the whole line.
+    final Color color = buildAppTheme().colorScheme.outline;
+    expect(tester.renderObject(span), paints..path(color: color));
+    final Size size = tester.getSize(span);
+    final painter =
+        tester
+                .widget<CustomPaint>(
+                  find.descendant(of: span, matching: find.byType(CustomPaint)),
+                )
+                .foregroundPainter!
+            as SpanOutlinePainter;
+    final List<Rect> boxes = painter.boxes(size.width);
+    // The test font is wide, so the line wraps inside the 360dp screen; the
+    // outline stays inside the text, one box per line the words fall on.
+    expect(boxes, isNotEmpty);
+    for (final Rect box in boxes) {
+      expect(box.right, lessThanOrEqualTo(size.width + 2));
+      expect(box.top, greaterThanOrEqualTo(-2));
+      expect(box.bottom, lessThanOrEqualTo(size.height + 2));
+    }
+    semantics.dispose();
+  });
+
+  test('the outline covers the chosen words only', () {
+    const String text = 'Winyo, son of someone we forgot';
+    const SpanOutlinePainter painter = SpanOutlinePainter(
+      text: text,
+      style: TextStyle(fontSize: 14),
+      textScaler: TextScaler.noScaling,
+      textDirection: TextDirection.ltr,
+      start: 14,
+      end: 31,
+      color: Color(0xFF000000),
+    );
+    TestWidgetsFlutterBinding.ensureInitialized();
+
+    // Wide enough for one line: one box, after "Winyo, son of ", to the end.
+    final List<Rect> one = painter.boxes(2000);
+    expect(one, hasLength(1));
+    final List<Rect> all = SpanOutlinePainter(
+      text: text,
+      style: painter.style,
+      textScaler: TextScaler.noScaling,
+      textDirection: TextDirection.ltr,
+      start: 0,
+      end: text.length,
+      color: painter.color,
+    ).boxes(2000);
+    expect(one.single.left, greaterThan(all.single.left + 20));
+    expect(one.single.right, closeTo(all.single.right, 4));
+  });
+
+  testWidgets('the outlined words keep wrapping at text scale 2.0, with no '
+      'ellipsis', (tester) async {
+    final String name = List.filled(12, "Nyang'or").join(' ');
+    await pumpApp(
+      tester,
+      ChainView(
+        lines: [
+          line(
+            '$name, son of someone we forgot',
+            id: 'a',
+            fatherPlaceholder: true,
+          ),
+        ],
+      ),
+      textScale: 2.0,
+      height: 3000,
+    );
+
+    expect(tester.takeException(), isNull);
+    final Finder f = find.text('$name, son of someone we forgot');
+    final RenderParagraph p = tester.renderObject<RenderParagraph>(f);
+    expect(p.didExceedMaxLines, isFalse);
+    expect(tester.getSize(f).width, lessThanOrEqualTo(360));
+    expect(tester.getSize(f).height, greaterThan(p.preferredLineHeight * 3));
+    expect(find.byKey(ChainView.forgottenSpanKey(0)), findsOneWidget);
+    expect(
+      tester.renderObject(find.byKey(ChainView.forgottenSpanKey(0))),
+      paints..path(),
+    );
   });
 
   testWidgets('a disputed line reads as supplied, in the normal text style', (

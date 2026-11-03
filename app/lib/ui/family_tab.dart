@@ -25,12 +25,20 @@ class FamilyTab extends StatefulWidget {
 }
 
 class _FamilyData {
-  const _FamilyData({required this.lines, required this.fathersHouses});
+  const _FamilyData({
+    required this.lines,
+    required this.fathersHouses,
+    required this.disputed,
+  });
 
   final List<ChainLine> lines;
 
   /// The houses of the father, or null when there is no father to follow.
   final HouseViewModel? fathersHouses;
+
+  /// True when accounts differ about the person's own parentage, so there is
+  /// no father to follow. Not the same as having no father step at all.
+  final bool disputed;
 }
 
 class _FamilyTabState extends State<FamilyTab> {
@@ -45,17 +53,36 @@ class _FamilyTabState extends State<FamilyTab> {
     }
   }
 
+  /// Reads the family once. A failure is reported here, once, and then
+  /// shown in words by the builder.
   Future<_FamilyData> _load() async {
+    try {
+      return await _read();
+    } catch (error, stack) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stack,
+          library: 'family tab',
+        ),
+      );
+      rethrow;
+    }
+  }
+
+  Future<_FamilyData> _read() async {
     final AppDatabase db = widget.db;
     final String me = widget.selfPersonId;
     final List<ChainLine> lines = await spokenChain(db, me);
     // The first step is the father. A depth 0 step stands for a starting
     // person whose own parentage is disputed: there is no father to follow.
     final List<AncestorStep> steps = await ancestorsOf(db, me);
-    final String? father = steps.isNotEmpty && steps.first.depth > 0
+    final bool disputed = steps.isNotEmpty && steps.first.depth == 0;
+    final String? father = steps.isNotEmpty && !disputed
         ? steps.first.personId
         : null;
     return _FamilyData(
+      disputed: disputed,
       lines: lines,
       fathersHouses: father == null
           ? null
@@ -122,7 +149,7 @@ class _FamilyTabState extends State<FamilyTab> {
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Text(
-        'not known yet',
+        data.disputed ? 'accounts differ' : 'not known yet',
         style: theme.textTheme.bodyLarge?.copyWith(
           color: theme.colorScheme.onSurfaceVariant,
         ),

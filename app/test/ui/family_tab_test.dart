@@ -1,3 +1,4 @@
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -149,6 +150,7 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.byType(HouseView), findsNothing);
+    expect(find.text('accounts differ'), findsNothing);
     final Finder unknown = find.text('not known yet');
     expect(unknown, findsOneWidget);
     // Plain grey, no button under it.
@@ -161,7 +163,7 @@ void main() {
   });
 
   testWidgets('a person whose own parentage is disputed has no houses to '
-      'show', (tester) async {
+      'show and says accounts differ', (tester) async {
     final String kid = await real(tester, () async {
       final a = builderFor('a');
       final b = builderFor('b');
@@ -186,7 +188,19 @@ void main() {
     await tester.tap(find.text('Houses'));
     await tester.pump();
     expect(tester.takeException(), isNull);
-    expect(find.text('not known yet'), findsOneWidget);
+    // The chain says accounts differ, so the houses say the same, not "not
+    // known yet": that is for a person with no father step at all.
+    expect(find.byType(HouseView), findsNothing);
+    expect(find.text('not known yet'), findsNothing);
+    final Finder differ = find.text('accounts differ');
+    expect(differ, findsOneWidget);
+    // Plain grey, no button under it.
+    final RenderParagraph label = tester.renderObject<RenderParagraph>(differ);
+    expect(
+      label.text.style?.color,
+      buildAppTheme().colorScheme.onSurfaceVariant,
+    );
+    expect(find.byType(FilledButton), findsNothing);
   });
 
   testWidgets('a person saved by first run with a placeholder father builds '
@@ -241,5 +255,18 @@ void main() {
     await tester.pump();
     expect(tester.takeException(), isNull);
     expect(find.byType(HouseView), findsOneWidget);
+  });
+
+  testWidgets('a failed read is reported as well as shown', (tester) async {
+    // A database that cannot be opened: every read fails.
+    final AppDatabase broken = AppDatabase(
+      NativeDatabase.memory(setup: (_) => throw StateError('cannot open')),
+    );
+    addTearDown(() => tester.runAsync(broken.close));
+    await pumpApp(tester, FamilyTab(db: broken, selfPersonId: 'me'));
+    await settle(tester);
+
+    expect(tester.takeException(), isA<StateError>());
+    expect(find.text('Could not read the family.'), findsOneWidget);
   });
 }

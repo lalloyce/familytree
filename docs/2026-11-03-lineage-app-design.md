@@ -1,6 +1,6 @@
 # Family Lineage App: Design
 
-Status: approved by the founder on 2026-11-03 (chat reply "Approve design").
+Status: approved by the founder on 2026-11-03 (chat reply "Approve design"), in the text committed as cc1f888. Later edits were not shown to the founder: 87537ba added spike findings to sections 9 and 14; 9ca0afc wrote this status line, changed the section 8 table sketch (`person.sex`, `person_name`, `house.ordinal`) and added decisions A to G to section 13; a37833f added the `app_settings` sketch line and decision H; the final M1 review fix reworded decision D, the section 13 title and the table name.
 Date: 2026-11-03 (the founder's answers to the open decisions are included)
 
 How to read this document: **Founder decided** marks what the founder said. **My call** marks choices I made that the founder has not agreed to. Section 12 lists what is still open, section 13 lists my calls to check, and section 14 lists what was verified against a source and what was not.
@@ -143,7 +143,7 @@ person_alias(alias_id, canonical_id)       -- merges
 merge_event(id, a, b, evidence, confirmed_by_a, confirmed_by_b, reverses_event_id)
 dispute_response(id, subject_id, kind, respondent_id, chosen_claim_id, created_at)
 privacy_setting(person_id, hide_quiet_details)
-app_setting(key, value)                    -- local only, never synced; M1 keeps "who is me" here
+app_settings(key, value)                   -- local only, never synced; M1 keeps "who is me" here
 operator_access_log(id, operator, table_name, at)
 ```
 - IDs are client-generated UUIDs. A name is never an identity.
@@ -239,7 +239,7 @@ The UX Architect and the engineering reports produced these. They are reasoning,
 - Who inherits an account when its owner dies.
 - Date and budget.
 
-## 13. My calls (not agreed by the founder)
+## 13. My calls, awaiting the founder's confirmation
 
 - The belongs-to-house change (section 4).
 - Quiet-link behaviour and its defaults (section 4).
@@ -258,11 +258,11 @@ The UX Architect and the engineering reports produced these. They are reasoning,
 - **A. `person.sex` is nullable.** The reason: "son of" versus "daughter of" needs it, and an unknown sex reads "child of". The table sketch in section 8 had no such field.
 - **B. `house.ordinal` is nullable.** The reason: a house can exist with a known number and an unknown wife, as in "houses 1 and 3 are unknown".
 - **C. A wife's membership is a `wifeOfHouse` claim, displayed "married".** `belongsToHouse` carries only the basis `bornTo` or `joined`. The reason: this keeps "child of one house" single-valued and "wife of several houses" multi-valued.
-- **D. One person replacing another person's claim never supersedes it.** Both stay active and show "Accounts differ". An asserter replacing their own active claim, where `baseClaimId` equals that claim's id, supersedes it, even when other accounts' claims on the same contest key are active. The other accounts' claims stay active. The reason: this follows the anti-goal that persistence must not win by volume.
+- **D. A claim replaces only its own account's active claim.** One account replacing another account's claim never supersedes it: both stay active and show "Accounts differ". `baseClaimId` supersedes the claim it names only when that claim is active, is of the same kind, was asserted by the same account, and has the same contest key or the same subject. Any other base (another account's claim, an inactive one, one of another kind, or one with a different subject and a different contest key) is stale: nothing is superseded and the new claim stands beside the existing ones. The same-subject rule lets one account move a wife from one house to another, although a wife claim contests by house. Other accounts' claims on the contest key stay active. "Competing" means that the active claims on one contest key hold more than one distinct content (subject, object, basis, body); accounts that agree on all four are not a dispute and show no "Accounts differ". The reason: this follows the anti-goal that persistence must not win by volume.
 - **E. When a person's parentage is disputed or cyclic, the chain stops at that person with "accounts differ".**
 - **F. In M1 a `joined` basis displays as the neutral "belongs to".** Showing the word "joined" waits for the audience rules in M4. This settles the "known tension" in section 8 for M1 only.
 - **G. `person_name(person_id, name, kind)` holds spelling variants and extra names** (edge case 12). `person.name_key` is the primary display name.
-- **H. In M1 the person who is "me" is kept in a local, never-synced `app_setting` row; from M2 it comes from the link between the account and its person.**
+- **H. In M1 the person who is "me" is kept in a local, never-synced `app_settings` row; from M2 it comes from the link between the account and its person.**
 
 ## 14. Verification status
 

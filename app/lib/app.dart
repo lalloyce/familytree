@@ -27,7 +27,20 @@ class RelatedApp extends StatefulWidget {
 }
 
 class _RelatedAppState extends State<RelatedApp> {
-  late final Future<String?> _self = widget.db.selfPersonId();
+  late final Future<String?> _self = _readSelf();
+
+  /// Reads who "me" is. A failure is reported here, once, and then shown in
+  /// words by the builder.
+  Future<String?> _readSelf() async {
+    try {
+      return await widget.db.selfPersonId();
+    } catch (error, stack) {
+      FlutterError.reportError(
+        FlutterErrorDetails(exception: error, stack: stack, library: 'app'),
+      );
+      rethrow;
+    }
+  }
 
   /// Set once first run has saved, so the family tab shows without a re-read.
   String? _savedSelf;

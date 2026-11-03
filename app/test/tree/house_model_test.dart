@@ -119,6 +119,36 @@ void main() {
       );
     });
 
+    test('a placeholder husband and a placeholder wife are marked, a named '
+        'one is not', () async {
+      final String ghost = await alice.addPlaceholder(sex: Sex.male);
+      final String ghostWife = await alice.addPlaceholder(sex: Sex.female);
+      final String house = await alice.addHouse(husbandId: ghost, ordinal: 1);
+      await alice.addWife(wifeId: ghostWife, houseId: house);
+      final String named = await alice.addPerson(name: 'Akinyi');
+      final String house2 = await alice.addHouse(husbandId: ghost, ordinal: 2);
+      await alice.addWife(wifeId: named, houseId: house2);
+
+      final HouseViewModel m = await buildHouseViewModel(db, ghost);
+
+      expect(m.husbandIsPlaceholder, isTrue);
+      expect(m.husbandName, 'someone we forgot');
+      expect(m.houses[0].wifeIsPlaceholder, isTrue);
+      expect(m.houses[0].wifeName, 'someone we forgot');
+      expect(m.houses[1].wifeIsPlaceholder, isFalse);
+      expect(m.houses[1].wifeName, 'Akinyi');
+
+      final HouseViewModel winyo = await buildHouseViewModel(db, f.winyo);
+      expect(winyo.husbandIsPlaceholder, isFalse);
+      expect(winyo.houses.every((h) => !h.wifeIsPlaceholder), isTrue);
+      // The new fields default to false.
+      expect(const HouseRowModel().wifeIsPlaceholder, isFalse);
+      expect(
+        const HouseViewModel(husbandName: 'x', houses: []).husbandIsPlaceholder,
+        isFalse,
+      );
+    });
+
     test('a husband with no houses reads empty', () async {
       final HouseViewModel m = await buildHouseViewModel(db, f.wade);
       expect(m.husbandName, 'Wade');

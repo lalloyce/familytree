@@ -10,6 +10,7 @@ class ChainLine {
     required this.text,
     required this.disputed,
     required this.placeholder,
+    this.fatherPlaceholder = false,
   });
 
   /// The person the line is about.
@@ -23,6 +24,11 @@ class ChainLine {
 
   /// True when [personId] is a placeholder, a stand-in for someone not known.
   final bool placeholder;
+
+  /// True when the father on this line is a placeholder, or when there is no
+  /// father to name and the line reads "of someone we forgot". The view
+  /// outlines those words. The text of the line does not change.
+  final bool fatherPlaceholder;
 }
 
 /// The father line of [personId] as spoken lines: the person first, then each
@@ -105,6 +111,9 @@ Future<List<ChainLine>> spokenChain(AppDatabase db, String personId) async {
         text: text,
         disputed: i == last && disputedEnd,
         placeholder: isPlaceholder(id),
+        fatherPlaceholder: i < steps.length
+            ? isPlaceholder(steps[i].personId)
+            : !disputedEnd,
       ),
     );
   }

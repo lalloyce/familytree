@@ -9,6 +9,7 @@ class HouseRowModel {
     this.wifeName,
     this.wifeSameAsElsewhere = false,
     this.wifeAccountsDiffer = false,
+    this.wifeIsPlaceholder = false,
     this.childLines = const [],
   });
 
@@ -26,6 +27,9 @@ class HouseRowModel {
   /// True when accounts name different women as the wife of this house.
   final bool wifeAccountsDiffer;
 
+  /// True when the wife is a placeholder: the view outlines her name.
+  final bool wifeIsPlaceholder;
+
   /// One line per child, in claim arrival order, for example
   /// "Manyi, born to this house".
   final List<String> childLines;
@@ -33,9 +37,16 @@ class HouseRowModel {
 
 /// A husband and his houses.
 class HouseViewModel {
-  const HouseViewModel({required this.husbandName, required this.houses});
+  const HouseViewModel({
+    required this.husbandName,
+    required this.houses,
+    this.husbandIsPlaceholder = false,
+  });
 
   final String husbandName;
+
+  /// True when the husband is a placeholder: the view outlines his name.
+  final bool husbandIsPlaceholder;
 
   /// Ordinal ascending with unknown ordinals last, ties by house id.
   final List<HouseRowModel> houses;
@@ -148,6 +159,8 @@ Future<HouseViewModel> buildHouseViewModel(
           ((wifeHouses[wifeId]?.any((h) => h != house.id) ?? false) ||
               (placedHouses[wifeId]?.isNotEmpty ?? false)),
       wifeAccountsDiffer: differ,
+      wifeIsPlaceholder:
+          wifeId != null && (persons[wifeId]?.isPlaceholder ?? false),
       childLines: [
         for (final MapEntry(key: id, value: view) in children.entries)
           [
@@ -166,6 +179,7 @@ Future<HouseViewModel> buildHouseViewModel(
 
   return HouseViewModel(
     husbandName: nameOf(husbandId),
+    husbandIsPlaceholder: persons[husbandId]?.isPlaceholder ?? false,
     houses: [for (final h in houses) rowOf(h)],
   );
 }

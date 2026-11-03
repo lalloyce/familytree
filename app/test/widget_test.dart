@@ -1,6 +1,10 @@
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:related/claims/claim_service.dart';
+import 'package:related/claims/first_run_save.dart';
+import 'package:related/claims/household_builder.dart';
+import 'package:related/ui/theme.dart';
 import 'package:related/app.dart';
 import 'package:related/data/app_settings.dart';
 import 'package:related/data/database.dart';
@@ -135,9 +139,52 @@ void main() {
     await tester.pumpWidget(RelatedApp(db: broken));
     await settle(tester);
 
-    expect(tester.takeException(), isNull);
+    // The error is reported, and shown in words.
+    expect(tester.takeException(), isA<StateError>());
     expect(find.byType(FirstRunScreen), findsNothing);
     expect(find.byType(FamilyTab), findsNothing);
     expect(find.text('Could not open your family.'), findsOneWidget);
+  });
+
+  testWidgets('first run with the father not known shows him as a dashed '
+      '"someone we forgot" in both views', (tester) async {
+    // The path the real app takes: a household saved by first run with no
+    // father named.
+    await tester.runAsync(() async {
+      final builder = HouseholdBuilder(
+        db,
+        ClaimService(db, accountId: 'device'),
+        accountId: 'device',
+      );
+      final String me = await saveFirstRun(
+        builder,
+        const FirstRunAnswers(name: 'Me', sex: Sex.male),
+      );
+      await db.setSelfPersonId(me);
+    });
+    await pumpRoot(tester);
+
+    // Chain: the words are as before, with the dashed outline inside the line.
+    expect(tester.takeException(), isNull);
+    expect(find.text('Me, son of someone we forgot'), findsOneWidget);
+    expect(find.text('someone we forgot'), findsNothing);
+    final Finder span = find.byKey(ChainView.forgottenSpanKey(0));
+    expect(span, findsOneWidget);
+    final Color color = buildAppTheme().colorScheme.outline;
+    expect(tester.renderObject(span), paints..path(color: color));
+
+    // Houses: the father's heading, outlined, with the same words.
+    await tester.tap(find.text('Houses'));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(find.text('someone we forgot'), findsOneWidget);
+    expect(find.text('Me, born to this house'), findsOneWidget);
+    final Finder husband = find.byKey(HouseView.husbandOutlineKey);
+    expect(husband, findsOneWidget);
+    expect(
+      find.descendant(of: husband, matching: find.text('someone we forgot')),
+      findsOneWidget,
+    );
+    expect(tester.renderObject(husband), paints..path(color: color));
   });
 }

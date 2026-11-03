@@ -206,6 +206,68 @@ void main() {
     expect(views.every((v) => v.competing), isTrue);
   });
 
+  test('a wife replaced by the same account in another house supersedes '
+      'her first claim', () async {
+    Future<ClaimRow> wife(String house, {String? base}) {
+      return alice.assertClaim(
+        kind: ClaimKind.wifeOfHouse,
+        subjectId: 'woman-1',
+        objectId: house,
+        baseClaimId: base,
+      );
+    }
+
+    // The contest key of a wife claim is the house, so the two claims are on
+    // different keys. The same subject and the same account still replace.
+    final ClaimRow first = await wife('house-1');
+    final ClaimRow second = await wife('house-2', base: first.id);
+
+    expect((await row(first.id)).status, 'superseded');
+    expect((await row(second.id)).status, 'active');
+    final views = await alice.activeClaims(ClaimKind.wifeOfHouse);
+    expect(views.map((v) => v.claim.id), [second.id]);
+    expect(views.single.competing, isFalse);
+  });
+
+  test('a base of another account, another subject and another key stays '
+      'stale', () async {
+    Future<ClaimRow> wife(
+      ClaimService s,
+      String woman,
+      String house, {
+      String? base,
+    }) {
+      return s.assertClaim(
+        kind: ClaimKind.wifeOfHouse,
+        subjectId: woman,
+        objectId: house,
+        baseClaimId: base,
+      );
+    }
+
+    // Another account's claim is never replaced, even for the same woman.
+    final ClaimRow bobs = await wife(bob, 'woman-1', 'house-1');
+    final ClaimRow alices = await wife(
+      alice,
+      'woman-1',
+      'house-2',
+      base: bobs.id,
+    );
+    expect((await row(bobs.id)).status, 'active');
+    expect((await row(alices.id)).status, 'active');
+
+    // Own claim, but a different woman and a different house: stale.
+    final ClaimRow other = await wife(alice, 'woman-2', 'house-3');
+    final ClaimRow third = await wife(
+      alice,
+      'woman-3',
+      'house-4',
+      base: other.id,
+    );
+    expect((await row(other.id)).status, 'active');
+    expect((await row(third.id)).status, 'active');
+  });
+
   test('wifeOfHouse without a house throws ArgumentError and inserts '
       'nothing', () async {
     await expectLater(

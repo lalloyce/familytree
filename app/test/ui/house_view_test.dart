@@ -7,8 +7,15 @@ import 'package:related/ui/theme.dart';
 
 import 'pump_app.dart';
 
-HouseViewModel model(List<HouseRowModel> houses, {String husband = 'Winyo'}) =>
-    HouseViewModel(husbandName: husband, houses: houses);
+HouseViewModel model(
+  List<HouseRowModel> houses, {
+  String husband = 'Winyo',
+  bool husbandIsPlaceholder = false,
+}) => HouseViewModel(
+  husbandName: husband,
+  houses: houses,
+  husbandIsPlaceholder: husbandIsPlaceholder,
+);
 
 Finder row(int i) => find.byKey(HouseView.rowKey(i));
 
@@ -167,6 +174,67 @@ void main() {
     expect(find.text('wife not known yet'), findsNothing);
     // A house whose wife is disputed is not "not known yet".
     expect(find.text('not known yet'), findsNothing);
+  });
+
+  testWidgets('a placeholder husband and a placeholder wife are drawn in a '
+      'dashed outline, and their words and heading stay as they were', (
+    tester,
+  ) async {
+    final SemanticsHandle semantics = tester.ensureSemantics();
+    await pumpApp(
+      tester,
+      HouseView(
+        house: model(
+          [
+            const HouseRowModel(
+              ordinal: 1,
+              wifeName: 'someone we forgot',
+              wifeIsPlaceholder: true,
+            ),
+            const HouseRowModel(ordinal: 2, wifeName: 'Akinyi'),
+          ],
+          husband: 'someone we forgot',
+          husbandIsPlaceholder: true,
+        ),
+      ),
+    );
+
+    final Color color = buildAppTheme().colorScheme.outline;
+    final Finder husband = find.byKey(HouseView.husbandOutlineKey);
+    expect(husband, findsOneWidget);
+    expect(
+      find.descendant(of: husband, matching: find.text('someone we forgot')),
+      findsOneWidget,
+    );
+    expect(tester.renderObject(husband), paints..path(color: color));
+    // Still a heading.
+    expect(
+      tester.getSemantics(find.text('someone we forgot')),
+      matchesSemantics(isHeader: true, label: 'someone we forgot'),
+    );
+
+    // Only the placeholder wife's name is outlined, not the whole line.
+    expect(find.byKey(HouseView.wifeOutlineKey(0)), findsOneWidget);
+    expect(find.byKey(HouseView.wifeOutlineKey(1)), findsNothing);
+    expect(find.text('someone we forgot, married'), findsOneWidget);
+    expect(
+      tester.renderObject(find.byKey(HouseView.wifeOutlineKey(0))),
+      paints..path(color: color),
+    );
+    expect(find.text('Akinyi, married'), findsOneWidget);
+    semantics.dispose();
+  });
+
+  testWidgets('a named husband and wife have no outline', (tester) async {
+    await pumpApp(
+      tester,
+      HouseView(
+        house: model([const HouseRowModel(ordinal: 1, wifeName: 'Akinyi')]),
+      ),
+    );
+
+    expect(find.byKey(HouseView.husbandOutlineKey), findsNothing);
+    expect(find.byKey(HouseView.wifeOutlineKey(0)), findsNothing);
   });
 
   testWidgets('the house number is left out when it is not known', (
