@@ -162,7 +162,8 @@ class MainObs {
   late Uint8List deviceImage; // B's Drift database file image
   final probes = <String, String>{}; // forged-write responses
   late Map<String, int> counts; // row counts from every endpoint
-  late Map<String, List<String>> tableRows; // rows visible from every table
+  late Map<String, List<String>> tableRows; // rows visible from every table, sorted
+  late Map<String, List<String>> tableRowsNatural; // same, server's natural order
   late String xFull; // X's full payload (non-vacuity)
   late String crossPull; // B asking pull_view for X's view
   List<String> stats = const []; // catalog statistics as seen by B
@@ -264,6 +265,7 @@ Future<MainObs> runMain({
       'pull_delta:persons': (delta['persons'] as List).length,
     };
     o.tableRows = await b.tableRows();
+    o.tableRowsNatural = await b.tableRows(natural: true);
     o.device = await device.dump();
     o.deviceImage = await device.fileImage();
     await device.close();
@@ -366,6 +368,13 @@ List<String> checkTableRows(MainObs a, MainObs b) => [
       '$t rows differ:\n  A ${a.tableRows[t]}\n  B ${b.tableRows[t]}',
 ];
 
+/// Same rows, in the order the server returned them with no ORDER BY.
+List<String> checkTableRowsNatural(MainObs a, MainObs b) => [
+  for (final t in Viewer.tables)
+    if (jsonEncode(a.tableRowsNatural[t]) != jsonEncode(b.tableRowsNatural[t]))
+      '$t natural-order rows differ:\n  A ${a.tableRowsNatural[t]}\n  B ${b.tableRowsNatural[t]}',
+];
+
 bool _bytesEqual(List<int> x, List<int> y) {
   if (x.length != y.length) return false;
   for (var i = 0; i < x.length; i++) {
@@ -437,6 +446,10 @@ void main() {
       expect(checkTableRows(a, b), isEmpty);
     });
 
+    test('rows visible from every table endpoint identical in natural order (no ORDER BY)', () {
+      expect(checkTableRowsNatural(a, b), isEmpty);
+    });
+
     test('measurement (not an app endpoint): catalog statistics seen by a SQL role', () {
       print('pg_stat_user_tables as B, world A:\n  ${a.stats.join('\n  ')}');
       print('pg_stat_user_tables as B, world B:\n  ${b.stats.join('\n  ')}');
@@ -457,6 +470,7 @@ void main() {
         'counts': checkCounts(a, b),
       };
       found.forEach((k, v) => print('canary_pull $k: ${v.length} failure(s)${v.isEmpty ? '' : '; first: ${v.first}'}'));
+      print('canary_pull natural-order rows: ${checkTableRowsNatural(a, b).length} failure(s)');
       for (final e in found.entries) {
         expect(e.value, isNotEmpty, reason: '${e.key} check did not detect canary_pull');
       }
@@ -469,6 +483,7 @@ void main() {
       final wire = checkWire(a, b);
       print('canary_write probes: ${probes.length} failure(s); first: ${probes.firstOrNull}');
       print('canary_write wire: ${wire.length} failure(s)');
+      print('canary_write natural-order rows: ${checkTableRowsNatural(a, b).length} failure(s)');
       expect(probes, isNotEmpty);
       expect(wire, isNotEmpty);
     });
@@ -481,6 +496,7 @@ void main() {
       final trace = checkNoQuietTrace(a);
       print('canary_rls counts: $counts');
       print('canary_rls table rows: ${rows.length} failure(s); quiet trace: $trace');
+      print('canary_rls natural-order rows: ${checkTableRowsNatural(a, b).length} failure(s)');
       expect(counts, isNotEmpty);
       expect(rows, isNotEmpty);
       expect(trace, isNotEmpty);
@@ -730,9 +746,12 @@ void main() {
       expect(fileTraces['secure_delete'], isEmpty);
     });
 
-    test('measurement: device file with the SQLite default keeps bytes?', () {
+    test('control: device file with the SQLite default keeps revoked bytes', () {
+      // Non-vacuity for the secure_delete test above: the same steps without
+      // secure_delete must leave traces, or that test proves nothing.
       print('pragmas: $pragmas');
       print('revoked bytes left in default file: ${fileTraces['default']}');
+      expect(fileTraces['default'], isNotEmpty);
     });
   });
 }

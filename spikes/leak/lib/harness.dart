@@ -145,11 +145,16 @@ class Viewer {
   }
 
   /// Rows visible from every table endpoint, as this viewer, as text.
-  Future<Map<String, List<String>>> tableRows() async {
+  /// Sorted by the row text when [natural] is false. When [natural] is true
+  /// there is no ORDER BY, so the server's physical scan order is kept: an
+  /// endpoint that returns rows unordered exposes that order too.
+  Future<Map<String, List<String>>> tableRows({bool natural = false}) async {
     final out = <String, List<String>>{};
     for (final t in tables) {
       final r = await conn.execute(
-        'select row_to_json(x)::text from spike.$t x order by row_to_json(x)::text',
+        natural
+            ? 'select row_to_json(x)::text from spike.$t x'
+            : 'select row_to_json(x)::text from spike.$t x order by row_to_json(x)::text',
       );
       out[t] = [for (final row in r) row.first as String];
     }

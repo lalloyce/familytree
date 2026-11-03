@@ -2,7 +2,7 @@
 
 Throwaway. The question: can a viewer who lacks a quiet claim learn that it exists?
 
-**Answer for the server model built here: no, through every app endpoint tested.** Viewer B's pull payload bytes, wire bytes, Drift table contents, Drift file image, forged-write responses and row counts are identical between a world with a quiet claim (shared to X only) and a world without it. The standing hide setting and revocation behave as the design requires. All 27 tests pass against the real server, and three deliberately leaky canary servers are each caught by the same checks.
+**Answer for the server model built here: no, through every app endpoint tested.** Viewer B's pull payload bytes, wire bytes, Drift table contents, Drift file image, forged-write responses and row counts are identical between a world with a quiet claim (shared to X only) and a world without it. The standing hide setting and revocation behave as the design requires. All 28 tests pass against the real server, and three deliberately leaky canary servers are each caught by the same checks.
 
 Two findings sit outside the app endpoints and need decisions for M2 (see Findings): catalog statistics leak row counts to any raw SQL session, and SQLite's default leaves revoked rows' bytes in the device file.
 
@@ -63,7 +63,7 @@ Versions, read from the tools on 2026-11-03: PostgreSQL 16.15 (Homebrew `postgre
 
 ## Results against the real server
 
-Final run output is quoted in the task report. All 27 tests passed.
+Final run output is quoted in the task report. All 28 tests passed.
 
 | # | Assertion | Result |
 |---|---|---|
@@ -76,7 +76,8 @@ Final run output is quoted in the task report. All 27 tests passed.
 | M6 | No quiet text or id in B's payloads, wire bytes, device tables, device image or table rows | PASS |
 | M7 | Forged writes: quiet id = random id (world A) = same id in world B, for six probes; all `{"ok": false, "code": "rejected"}` | PASS |
 | M8 | Row counts from every endpoint identical (6 tables, full pull and delta pull sections) | PASS |
-| M9 | Rows visible from every table identical | PASS |
+| M9 | Rows visible from every table identical (sorted by row text) | PASS |
+| M9b | Rows visible from every table identical in the server's natural order (no ORDER BY): physical row order does not differ in this scenario | PASS |
 | H1 | Non-vacuity: R holds the hidden note; an unhidden note does reach X | PASS |
 | H2 | B: full payload bytes identical before the setting, after it, after the note | PASS |
 | H3 | B: delta payload bytes identical at the same points | PASS |
@@ -89,6 +90,7 @@ Final run output is quoted in the task report. All 27 tests passed.
 | R5 | X keeps the claim (revocation is per viewer) | PASS |
 | R6 | Forged writes after revocation: revoked id = random id | PASS |
 | R7 | Device file with `PRAGMA secure_delete = ON` keeps no bytes of the revoked rows | PASS |
+| R7b | Control for R7: the same steps with the SQLite default (`secure_delete=0`) do leave the revoked bytes in the file | PASS |
 | C1-C3 | Canaries detected (below) | PASS |
 
 The six forged-write probes, each aimed at the target id and at an id that exists nowhere: change the target claim's audience; a new claim based on the target claim; a new claim reusing the target claim's id; a new claim naming the target person as object; the same as subject; a new person reusing the target person's id.
@@ -101,22 +103,23 @@ Each canary is loaded on top of the real server and the same check functions are
 |---|---|---|
 | `canary_pull` | `pull_view` runs as owner and adds every person named by any claim about a visible person, which pulls in the quiet sire | payload bytes (9 of 18 pulls differ), wire bytes (44271 vs 42313), device tables (person 9 vs 8 rows), device image, quiet-text search, counts (`pull_full:persons` 9 vs 8) |
 | `canary_write` | a pre-check on `share` raises "claim not found" for a missing claim, while a hidden claim falls through to "rejected" | forged-write comparison, wire bytes |
-| `canary_rls` | the person row rule opened to everyone | table counts (`person` 9 vs 8), table rows, quiet-text search, wire bytes |
+| `canary_rls` | the person row rule opened to everyone | table counts (`person` 9 vs 8), table rows (sorted and natural order), quiet-text search, wire bytes |
 
-Running the main group with `LEAK_CANARY=<canary>` turns it red: 6 failures for `canary_pull`, 2 for `canary_write`, 4 for `canary_rls`. With `LEAK_CANARY=canary_pull` the hide group fails 3 tests and the revocation group fails 4.
+Running the main group with `LEAK_CANARY=<canary>` turns it red: 6 failures for `canary_pull`, 2 for `canary_write`, 5 for `canary_rls`. The natural-order check (M9b) fails only for `canary_rls`; the other two canaries do not change what the table endpoints return, so it has nothing to catch there. With `LEAK_CANARY=canary_pull` the hide group fails 3 tests and the revocation group fails 4.
 
 ## What was normalised
 
 - **Payload bytes (M2, H2, H3): nothing.** The server adds no timestamps. `created_at` is client-supplied and fixed in the test, and `pull_view` renders it in UTC so the session time zone cannot change it. Arrays are ordered by id inside `pull_view`. The cursor is a per-account counter that moves only when that account's own access changes.
 - **Wire bytes (M3): the connection handshake is excluded,** meaning everything up to and including the first ReadyForQuery message. It carries BackendKeyData, a process id and random cancel key that differ on every connection and carry no data. Everything after it (row descriptions, data rows, command tags, the session's `set role` and `set_config` responses) is compared byte for byte.
 - **Device tables and image (M4, M5): nothing.** Rows are compared in rowid order with the rowid included. The image is the output of `VACUUM INTO`, which is a compacted copy, so it does not show free pages (see the secure_delete finding).
-- **Revocation comparison with a never-shared world (R4): rowid stripped and `sync_state` excluded.** B did hold the row, so later rows got different rowids, and B's cursor moved twice (grant and revoke). Both reflect what B legitimately saw; neither reveals anything B was not entitled to.
+- **Table endpoint rows (M9): sorted by row text.** `tableRows()` orders each table's rows by `row_to_json(x)::text`, so M9 compares the set of rows, not their order. Justification: sorting isolates content from order, so a content difference is reported as such. Because physical row order could itself be a channel, M9b compares the same reads with no ORDER BY, in the order the server returned them, with nothing normalised. Both pass.
+- **Revocation comparison with a never-shared world (R4): rowid stripped, rows sorted, and `sync_state` excluded.** B did hold the row, so later rows got different rowids, and B's cursor moved twice (grant and revoke). After the rowid is removed, the remaining rows are sorted by their text, because insertion order also shifted when the revoked row was inserted among them. All three reflect what B legitimately saw; none reveals anything B was not entitled to.
 - Identity: both worlds use the same fixed UUIDs for everything except the quiet claim and its sire. Ids made through `submit` are derived from fixed (account, nonce) pairs, so they match too.
 
 ## Findings
 
 1. **Catalog statistics leak to a raw SQL session (outside the app endpoints).** As role `app_viewer`, B can read `pg_stat_user_tables`, which every role can read. After the writers disconnect, world A shows `claim 7`, `person 4`, `claim_audience 3`, `claim_access 25` inserted rows; world B shows 6, 3, 2, 23. That reveals a hidden claim exists. The test records this as a measurement, not a pass/fail assertion, because a viewer in the design never holds a SQL session; the app endpoints (pull, submit, tables under row security) show no difference. **M2 must guarantee viewers reach the database only through the RPC and table endpoints** and that no exposed endpoint returns catalog or statistics data. In Supabase terms: confirm the exposed schemas exclude `pg_catalog` and that viewers cannot open direct database connections. [NEEDS SOURCE] for how Supabase's PostgREST exposes schemas; not checked here.
-2. **Revoked rows stay in the device file's free pages by default.** With SQLite's default (`secure_delete=0`, `journal_mode=delete`, measured), the revoked note's body, its person's name and both ids remain as bytes in the database file after the rows are deleted. With `PRAGMA secure_delete = ON` none remain (R7). M2's device database should set `secure_delete = ON`. The design's local encryption protects this at rest but not on an unlocked phone. WAL mode was not tested and may hold old pages in the `-wal` file until a checkpoint.
+2. **Revoked rows stay in the device file's free pages by default.** With SQLite's default (`secure_delete=0`, `journal_mode=delete`, measured), the revoked note's body, its person's name and both ids remain as bytes in the database file after the rows are deleted. With `PRAGMA secure_delete = ON` none remain (R7, with R7b as its control). M2's device database should set `secure_delete = ON`. The design's local encryption protects this at rest but not on an unlocked phone. WAL mode was not tested and may hold old pages in the `-wal` file until a checkpoint.
 3. **Insert-collision oracle closed by binding ids to their writer.** Without it, a writer who knows a hidden claim's id can tell it exists. Knowing the id needs a prior leak or earlier access, so the risk is narrow, but the binding removes it at the cost of one hash on each write. This is a proposed decision for M2, not yet agreed.
 4. **Base claims the viewer cannot see are withheld.** If a visible claim's `base_claim_id` points at a claim the viewer cannot see, `pull_view` sends `null` instead of the id. Not exercised by a test in this spike.
 5. **Revocation cannot recall data already on a device** (design section 4). B held the note and its person before revocation; nothing on the server can remove what B copied, screenshotted or backed up. The next pull removes the rows from the app's own database, and with `secure_delete` on, from its file.
@@ -134,6 +137,13 @@ Running the main group with `LEAK_CANARY=<canary>` turns it red: 6 failures for 
 - Merge evidence, aliases, disputes, cycle detection on hidden data, operator access logging.
 - "The author of a hidden note sees only that their own note is hidden": the author sees their note but no "hidden" marker exists.
 - Edits to person rows (name changes) and how they reach viewers. Persons are sent as a full set on every pull.
+- Other raw-SQL channels in the same class as the `pg_stat_user_tables` finding: `pg_class.reltuples` and `relpages`, `EXPLAIN` row estimates, `pg_relation_size`, the `xmin` and `ctid` system columns, transaction-id functions, and `pg_locks`. `pg_stats` was checked only by reading its definition in this cluster (PostgreSQL 16.15): it filters out tables where row security is active (`(c.relrowsecurity = false) OR (NOT row_security_active(c.oid))`). Not tested as a channel.
+- PostgREST planned or estimated counts, and whether it exposes system columns. [UNVERIFIED]
+- Server logs, WAL and replication, backups and point-in-time recovery.
+- Device-side operating-system backups of the SQLite file, and leftovers of deleted rollback-journal files.
+- The hide setting turned on after a quiet note about that person was already shared. The audience would then receive a removal, which may tell them about the setting.
+- Competing-account status logic. The spike uses only `status = 'active'`.
+- Errors that escape the generic mapping. PL/pgSQL `exception when others` does not catch `QUERY_CANCELED` or `ASSERT_FAILURE`. A `statement_timeout` firing inside `refresh_claim_access()` would escape `submit()` with a different error, turning a timing channel into an error-text channel. M2 must account for it.
 
 ## Final shape for M2
 
