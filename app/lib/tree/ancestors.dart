@@ -8,6 +8,7 @@ class AncestorStep {
     required this.houseId,
     required this.depth,
     required this.disputed,
+    this.basis,
   });
 
   /// The ancestor: the husband of [houseId].
@@ -25,6 +26,11 @@ class AncestorStep {
   /// chain: accounts disagree about it, or the walk reached a person it had
   /// already visited. The list ends with this step.
   final bool disputed;
+
+  /// The basis of the `belongsToHouse` claim by which the previous person in
+  /// the chain (the child, or the starting person at depth 1) belongs to
+  /// [houseId]. Null for the depth 0 sentinel.
+  final Basis? basis;
 }
 
 /// The father line of [personId], from the father upward. Follows only
@@ -78,7 +84,8 @@ Future<List<AncestorStep>> ancestorsOf(
     // A non-competing person has one distinct (house, basis, subject)
     // content, so every candidate names the same house and "first by
     // arrival" cannot matter.
-    final String? houseId = byPerson[current]?.first.claim.objectId;
+    final ClaimRow? claim = byPerson[current]?.first.claim;
+    final String? houseId = claim?.objectId;
     final String? father = houseId == null ? null : husbandOf[houseId];
     if (houseId == null || father == null) {
       break;
@@ -90,6 +97,7 @@ Future<List<AncestorStep>> ancestorsOf(
         houseId: houseId,
         depth: steps.length + 1,
         disputed: disputed,
+        basis: claim!.basis,
       ),
     );
     if (disputed) {

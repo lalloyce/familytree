@@ -183,6 +183,26 @@ void main() {
     },
   );
 
+  test('each step carries the basis by which the previous person belongs to '
+      'its house', () async {
+    final String child = await alice.addPerson();
+    final String father = await alice.addPerson();
+    final String grandfather = await alice.addPerson();
+    await placeUnder(alice, child, father, basis: Basis.joined);
+    await placeUnder(alice, father, grandfather);
+
+    final steps = await ancestorsOf(db, child);
+
+    // The child joined the father's house; the father was born to the
+    // grandfather's.
+    expect(steps.map((s) => s.basis), [Basis.joined, Basis.bornTo]);
+    // The sentinel for a disputed starting person has no basis.
+    final String contested = await alice.addPerson();
+    await placeUnder(alice, contested, father);
+    await placeUnder(bob, contested, grandfather);
+    expect((await ancestorsOf(db, contested)).single.basis, isNull);
+  });
+
   test('stops at maxDepth without flagging', () async {
     final String child = await alice.addPerson();
     final String father = await alice.addPerson();
