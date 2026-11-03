@@ -489,10 +489,13 @@ Future<FuzzResult> runFuzz(FuzzConfig cfg) async {
   // in the same arrival order minus the merge and its undo. If the view
   // differs, the per-row statuses of that replay are compared with a replay
   // of the whole log. The difference is accepted only when every changed
-  // status sits on a merge or undo row that arrived after the merge (an
-  // interfering event whose outcome depended on the merged state; it becomes
-  // a review task, Finding 3). Anything else fails, including a view
-  // difference with no status difference.
+  // status sits on a merge or undo row that touches at least one of the two
+  // people in the replayed merge and arrived between that merge and its
+  // undo (an interfering event whose outcome depended on the merged state;
+  // it becomes a review task, Finding 3), and when putting those rows' real
+  // statuses back into the replay reproduces the real view exactly.
+  // Anything else fails, including a view difference with no status
+  // difference.
   final arrival = [...serverRows]..sort((x, y) => x.seq!.compareTo(y.seq!));
   FakeServer replayWithout(Set<String> drop) {
     final s = FakeServer(mode: cfg.mode)..poisonActive = false;
@@ -503,12 +506,21 @@ Future<FuzzResult> runFuzz(FuzzConfig cfg) async {
   }
 
   var replayed = 0, identical = 0, acceptedInterfering = 0, pairFailed = 0;
+  var pairFailedCascade = 0;
   final full = renderView(serverRows);
   final whole = replayWithout({});
   if (renderView(whole.rows) != full) {
     a3f.add('replaying the whole log does not reproduce the server view');
   }
   final byId = {for (final r in serverRows) r.id: r};
+  Set<String> people(ClaimRow r) => switch (r.kind) {
+    RowKind.merge => {r.subjectId, r.objectId!},
+    RowKind.unmerge =>
+      byId[r.subjectId]?.kind == RowKind.merge
+          ? people(byId[r.subjectId]!)
+          : {},
+    _ => {},
+  };
   for (final u in serverRows.where(
     (r) => r.kind == RowKind.unmerge && r.status == Status.effective,
   )) {
@@ -524,21 +536,66 @@ Future<FuzzResult> runFuzz(FuzzConfig cfg) async {
       for (final r in cf.rows)
         if (whole[r.id]!.status != r.status) whole[r.id]!,
     ];
+    final ps = people(m);
     final interferingOnly =
         changed.isNotEmpty &&
         changed.every(
           (r) =>
               (r.kind == RowKind.merge || r.kind == RowKind.unmerge) &&
-              r.seq! > m.seq!,
+              r.seq! > m.seq! &&
+              r.seq! < u.seq! &&
+              people(r).intersection(ps).isNotEmpty,
         );
-    if (interferingOnly) {
+    // The accepted differences must explain the whole view difference.
+    final realStatus = {for (final r in changed) r.id: r.status};
+    final explained =
+        interferingOnly &&
+        renderView(
+              cf.rows.map(
+                (r) => realStatus.containsKey(r.id)
+                    ? r.withServer(status: realStatus[r.id]!)
+                    : r,
+              ),
+            ) ==
+            full;
+    if (interferingOnly && explained) {
       acceptedInterfering++;
     } else {
       pairFailed++;
+      // Diagnostic only (Finding 3b); the pair still fails. A "cascade" is
+      // a failure where every changed status is on a merge or undo row, the
+      // earliest of them is an interfering row inside the window, and
+      // putting all changed statuses back reproduces the real view.
+      final first = changed.isEmpty
+          ? null
+          : changed.reduce((x, y) => x.seq! < y.seq! ? x : y);
+      final allStatus = {for (final r in changed) r.id: r.status};
+      final cascade =
+          first != null &&
+          changed.every(
+            (r) => r.kind == RowKind.merge || r.kind == RowKind.unmerge,
+          ) &&
+          first.seq! > m.seq! &&
+          first.seq! < u.seq! &&
+          people(first).intersection(ps).isNotEmpty &&
+          renderView(
+                cf.rows.map(
+                  (r) => allStatus.containsKey(r.id)
+                      ? r.withServer(status: allStatus[r.id]!)
+                      : r,
+                ),
+              ) ==
+              full;
+      if (cascade) pairFailedCascade++;
       a3f.add(
-        'merge ${m.id} plus undo left a trace '
+        'merge ${m.id} plus undo (seq ${m.seq}..${u.seq}) left a trace '
         '(${changed.length} status changes, '
-        '${changed.where((r) => r.isClaim).length} on claims): '
+        '${changed.where((r) => r.isClaim).length} on claims, '
+        'interfering only: $interferingOnly, explained: $explained; '
+        'changed: ${[for (final r in changed) '${r.kind.name}@${r.seq}'
+              '${r.seq! > m.seq! && r.seq! < u.seq! ? '[in' : '[out'}'
+              '${people(r).intersection(ps).isNotEmpty ? ',touches]' : ',other]'}'
+              ' ${whole[r.id]!.status}->${cf[r.id]!.status}'].join(' ')}): '
         '${firstDiff(without, full)}',
       );
     }
@@ -564,6 +621,7 @@ Future<FuzzResult> runFuzz(FuzzConfig cfg) async {
     'undoPairsIdentical': identical,
     'undoPairsAcceptedInterfering': acceptedInterfering,
     'undoPairsFailed': pairFailed,
+    'undoPairsFailedCascade': pairFailedCascade,
     'syncs': syncs,
     'toggles': toggles,
     'midPushDrops': nets.fold<int>(0, (s, n) => s + n.midPushDrops),
