@@ -77,17 +77,54 @@ Read from the tools on 2026-11-03.
 - Chrome: clean.
 - Xcode: one warning, "iOS 27.2 Simulator not installed". Xcode 27.2 and CocoaPods 1.17.0 are present. Not needed until iOS work starts.
 
+## Scale check (Task 14)
+
+`app/test/tree/scale_test.dart` builds a synthetic tree of exactly 3,000 people through `HouseholdBuilder` (`app/test/fixtures/synthetic_tree.dart`, same shape as `spikes/tree/lib/gen.dart`) and runs the real readers over it. The generator is test code and is not shipped.
+
+Reading of "20 women who appear in two houses" (the plan's wording is ambiguous, so both readings are built): 10 women are the wife of two houses under two different husbands who are brothers, and 10 other women are a daughter in one house and the wife of another. The second set is a subset of ordinary married women in this model, picked so a test can name them.
+
+Every number below is **host proxy, Apple M4 class, in-memory SQLite** (chip read from `sysctl -n machdep.cpu.brand_string`: "Apple M4"), from `flutter test test/tree/scale_test.dart` on 2026-11-03. It is NOT a weak-phone result and is not compared with any phone threshold. The 100 ms bound is the plan's own number, not the design's.
+
+| Measure (host proxy, in-memory SQLite) | Result |
+|---|---|
+| `spokenChain` for the deepest person (15 lines), 20 timed calls after 3 warmups, median | 5.65 to 6.04 ms (5 runs) |
+| Same, 95th percentile (nearest rank) | 6.27 to 6.56 ms |
+| `ancestorsOf` for all 3,000 people, total (about 5.7 ms a call), longest chain 14 steps | 16.8 to 17.2 s (5 runs) |
+| Building the 3,000 people (people, houses and all claims, one transaction) | 8.9 to 10.2 s (5 runs) |
+
+- No index was needed: the median is far under 100 ms, so no Drift index on `Claims(kind, subjectId, status)` was added and there is no before-and-after figure. `ancestorsOf` still reads every active `belongsToHouse` claim and every house per call; that cost is visible in the 17 s loop and grows with the family.
+- Generation through the builder fitted in 60 s, the threshold the Task 14 plan resolutions set for falling back to direct Drift inserts, so the fallback was not used. The generator does not reproduce the spike's very-long-name branch (names of 80 or more characters).
+- The test also seeds one cycle and one disputed person into the same tree, with the extra claims rolled back, and checks that `ancestorsOf` and `spokenChain` stop at them.
+- Not measured: `buildHouseViewModel` and `siblingsOf` at 3,000 people, and any widget build or frame time. The app shows one chain (about 15 lines here) and the father's houses; it has no 3,000-row list (spike 4 scrolled one).
+
+Phone run of the 3,000-person tree (founder work). Status: **awaiting phone.**
+
+| Phone | Cold start to chain visible | Chain and house view smoothness | Out-of-memory event |
+|---|---|---|---|
+| (not named) | awaiting phone | awaiting phone | awaiting phone |
+
+Procedure. There is no clean way to load the tree into the app without adding production code, and none was added. Proposal, not built: a dev-only script `app/tool/seed_synthetic.dart`, outside `lib/` so it is never in the app, that opens a file with `NativeDatabase(File('related.sqlite'))`, calls `buildSyntheticTree(db, accountId: 'local')`, calls `db.setSelfPersonId(tree.deepestPersonId)` and closes. A throwaway script of that shape was run on this host with `dart run` and wrote a 3,000-person file (about 1.4 MB) in about 11 s; it was then deleted. The script must pass `accountId: 'local'` (the app's own account id, `localAccountId` in `app/lib/app.dart`); the generator's default is `'synthetic'`, and claims under that id would read as another account's, so they would show "accounts differ" against the phone's own edits (decision D). None of the adb, profile-build and `run-as` steps below has been run on a device; they are untested. To use it on the phone:
+
+1. Install a debug build (`flutter run -d <device>`), then stop it. Debug is needed because `adb run-as` works only on debuggable builds.
+2. `adb push related.sqlite /data/local/tmp/`, then `adb shell run-as ke.related.app cp /data/local/tmp/related.sqlite app_flutter/related.sqlite`. The file name `related.sqlite` comes from `drift_flutter` and `main.dart`; the directory `app_flutter` is the usual Android documents directory and is inferred, not checked on a device. Delete any `related.sqlite-wal` and `-shm` next to it.
+3. Cold start numbers need a profile build (debug numbers mean nothing): `flutter build apk --profile`, then `adb install -r` to keep the app's data (not tested). Force-stop the app, then `adb shell am start -W -n ke.related.app/.MainActivity` and record `TotalTime`, three runs, battery above 50 percent and nothing else open (as in `spikes/tree/README.md`).
+4. Open the Family tab, switch between the chain and the houses, and note any stutter. Watch `adb logcat` for an out-of-memory event or a killed process (design section 14 notes an Android out-of-memory caveat for complex Drift queries).
+
 ## Next
 
-Done: spikes 1 to 5 are built and committed (`spikes/`). Results, findings and three proposed decisions are in [spike-results.md](spike-results.md). Every phone cell there reads "awaiting phone". The host-machine numbers are a proxy, not a weak-phone result.
+State at the end of M1 (2026-11-03), all local commits, nothing pushed:
+
+- Built: spikes 1 to 5 (`spikes/`, results in [spike-results.md](spike-results.md)); the Drift schema, claims, household builder, ancestor query, sibling groups, spoken chain, theme, chain and house views, first-run screen, family tab, app root and the local self-person setting (Tasks 7 to 13); the 3,000-person scale check (Task 14). `flutter test` and `flutter analyze` in `app/` are clean.
+- Not done: nothing has been run on a phone or emulator. Every phone cell in `docs/spike-results.md` and in the scale check above reads "awaiting phone". The host-machine numbers are a proxy, not a weak-phone result.
 
 Awaiting the founder:
 
-1. Review `docs/spike-results.md` and answer its three proposals and seven open questions. The plan for M2 to M6 is written only after this review.
+1. Review `docs/spike-results.md` and answer its three proposals and seven open questions.
 2. Task 1: paper test with relatives. The founder runs it. The script is `docs/paper-test.md`. No interviews are recorded yet.
 3. Name the weakest test phone and record its model, RAM and Android version above. It unlocks the spike 3 on-device matrix, the spike 4 layout and frame timing, and the spike 5 cold start, update survival and backup and restore. Procedures are in each spike's README.
 4. Task 13 step 5: run the app on the weakest phone and enter your own first-run household by hand, then note anything awkward here. The app is prepared (`cd app && flutter run`); this has not been done.
+5. Task 14 step 5: the 3,000-person run on the phone (see Scale check above).
 
-Built and committed locally: the Drift schema, claims, household builder, ancestor query, sibling groups, spoken chain, theme, chain and house views (Tasks 7 to 13a). Task 13b adds the first-run screen, the family tab, the app root (`app/lib/app.dart`, `main.dart`) and the local self-person setting. The app has not been run on a phone or emulator.
+Next: the founder reviews `docs/spike-results.md` and answers its open questions, then M2 to M6 are planned from it. The M2 to M6 plan is not written yet; the plan says it is written only after that review.
 
 M2 must do first: M1 claims are written with `assertedBy = 'local'` (`localAccountId` in `app/lib/app.dart`), and people and houses with `createdBy = 'local'`. Before the first edit or sync, M2 must, in one transaction, rewrite `'local'` to the real account id in `persons.createdBy`, `houses.createdBy`, `claims.assertedBy` and `field_edits.assertedBy`, and link the account to its person. Otherwise a user's own M1 claims read as another account's (decision D) and would show "accounts differ" against themselves. The id `'local'` must never be uploaded.
