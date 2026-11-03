@@ -141,11 +141,25 @@ Future<FuzzResult> runFuzz(FuzzConfig cfg) async {
   }
 
   Future<void> assertClaim(Device d, List<String> persons) async {
-    final kind = rng.nextDouble() < 0.6
+    var kind = rng.nextDouble() < 0.6
         ? RowKind.belongsToHouse
         : RowKind.wifeOfHouse;
-    final subject = pick(persons);
-    final house = pick(houses);
+    var subject = pick(persons);
+    var house = pick(houses);
+    // Half the time the user revisits one of the eight most recent facts on
+    // their phone (to correct or dispute it). Recent facts are what both of
+    // account A's phones hold, so the same key is edited offline from two
+    // devices and stale bases occur.
+    final known = await d.recentStandingClaims(8);
+    if (known.isNotEmpty && rng.nextBool()) {
+      final k = pick(known);
+      kind = k.kind;
+      if (kind == RowKind.belongsToHouse) {
+        subject = k.subjectId;
+      } else {
+        house = k.objectId!;
+      }
+    }
     final standing = await d.standingClaims(
       kind,
       kind == RowKind.belongsToHouse ? subject : house,
@@ -421,6 +435,27 @@ Future<FuzzResult> runFuzz(FuzzConfig cfg) async {
       );
     }
   }
+  // A claim that arrives after a later claim of its own asserter already
+  // named it as base must never stand: one person must not compete with
+  // themselves through late arrival.
+  var lateChecked = 0;
+  for (final p in claims) {
+    final namedEarlier = claims.any(
+      (s) =>
+          s.assertedBy == p.assertedBy &&
+          s.baseClaimId == p.id &&
+          contestKey(s) == contestKey(p) &&
+          s.seq! < p.seq!,
+    );
+    if (!namedEarlier) continue;
+    lateChecked++;
+    if (p.status != Status.superseded) {
+      a2f.add(
+        'late claim ${p.id} by ${p.assertedBy} stands beside its own '
+        'replacement',
+      );
+    }
+  }
   final byKey = <String, List<ClaimRow>>{};
   for (final c in claims) {
     (byKey[contestKey(c)!] ??= []).add(c);
@@ -450,53 +485,61 @@ Future<FuzzResult> runFuzz(FuzzConfig cfg) async {
   }
 
   // ------------------------------------------------------------ A3
-  // For every merge later undone, replaying the log without the pair must
-  // give the same view. Pairs with another merge or undo touching the same
-  // people in between are skipped: their outcome depended on the merged
-  // state at arrival (they become review tasks).
-  final byId = {for (final r in serverRows) r.id: r};
+  // Every merge later undone is replayed: a fresh server receives every row
+  // in the same arrival order minus the merge and its undo. If the view
+  // differs, the per-row statuses of that replay are compared with a replay
+  // of the whole log. The difference is accepted only when every changed
+  // status sits on a merge or undo row that arrived after the merge (an
+  // interfering event whose outcome depended on the merged state; it becomes
+  // a review task, Finding 3). Anything else fails, including a view
+  // difference with no status difference.
   final arrival = [...serverRows]..sort((x, y) => x.seq!.compareTo(y.seq!));
-  String replayWithout(Set<String> drop) {
+  FakeServer replayWithout(Set<String> drop) {
     final s = FakeServer(mode: cfg.mode)..poisonActive = false;
     for (final r in arrival) {
       if (!drop.contains(r.id)) s.push([authored[r.id] ?? r]);
     }
-    return renderView(s.rows);
+    return s;
   }
 
-  Set<String> people(ClaimRow r) => r.kind == RowKind.merge
-      ? {r.subjectId, r.objectId!}
-      : (byId[r.subjectId] == null ? {} : people(byId[r.subjectId]!));
-  var pairs = 0, skipped = 0;
+  var replayed = 0, identical = 0, acceptedInterfering = 0, pairFailed = 0;
   final full = renderView(serverRows);
-  if (replayWithout({}) != full) {
+  final whole = replayWithout({});
+  if (renderView(whole.rows) != full) {
     a3f.add('replaying the whole log does not reproduce the server view');
   }
+  final byId = {for (final r in serverRows) r.id: r};
   for (final u in serverRows.where(
     (r) => r.kind == RowKind.unmerge && r.status == Status.effective,
   )) {
     final m = byId[u.subjectId]!;
-    final ps = people(m);
-    final interferes = serverRows.any(
-      (r) =>
-          (r.kind == RowKind.merge || r.kind == RowKind.unmerge) &&
-          r.id != m.id &&
-          r.id != u.id &&
-          r.seq! > m.seq! &&
-          r.seq! < u.seq! &&
-          people(r).intersection(ps).isNotEmpty,
-    );
-    if (interferes) {
-      skipped++;
+    replayed++;
+    final cf = replayWithout({m.id, u.id});
+    final without = renderView(cf.rows);
+    if (without == full) {
+      identical++;
       continue;
     }
-    pairs++;
-    // Counterfactual: a fresh server of the same kind receives every row in
-    // the same arrival order, minus this merge and its undo.
-    final without = replayWithout({m.id, u.id});
-    if (without != full) {
+    final changed = [
+      for (final r in cf.rows)
+        if (whole[r.id]!.status != r.status) whole[r.id]!,
+    ];
+    final interferingOnly =
+        changed.isNotEmpty &&
+        changed.every(
+          (r) =>
+              (r.kind == RowKind.merge || r.kind == RowKind.unmerge) &&
+              r.seq! > m.seq!,
+        );
+    if (interferingOnly) {
+      acceptedInterfering++;
+    } else {
+      pairFailed++;
       a3f.add(
-        'merge ${m.id} plus undo left a trace: ${firstDiff(without, full)}',
+        'merge ${m.id} plus undo left a trace '
+        '(${changed.length} status changes, '
+        '${changed.where((r) => r.isClaim).length} on claims): '
+        '${firstDiff(without, full)}',
       );
     }
   }
@@ -510,12 +553,17 @@ Future<FuzzResult> runFuzz(FuzzConfig cfg) async {
     'claims': claims.length,
     'superseded': server.supersessions,
     'lateBase': server.lateBaseSupersessions,
+    'lateBaseViaInactive': server.lateBaseViaInactive,
+    'lateArrivalsChecked': lateChecked,
+    'staleBase': server.staleBase,
     'ownReplaceKeptByContest': server.ownReplaceKeptByContest,
     'contestedKeys': contested,
     'selfDifferKeys': selfDiffer,
     'conflictedMerges': server.conflictedMerges,
-    'undoPairsChecked': pairs,
-    'undoPairsSkipped': skipped,
+    'undoPairsReplayed': replayed,
+    'undoPairsIdentical': identical,
+    'undoPairsAcceptedInterfering': acceptedInterfering,
+    'undoPairsFailed': pairFailed,
     'syncs': syncs,
     'toggles': toggles,
     'midPushDrops': nets.fold<int>(0, (s, n) => s + n.midPushDrops),

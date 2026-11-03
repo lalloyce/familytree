@@ -206,6 +206,14 @@ class Device {
     [kind.name, keyId],
   );
 
+  /// The most recent claims standing on this device, on any key: unsent
+  /// ones first, then by arrival, newest first.
+  Future<List<ClaimRow>> recentStandingClaims(int n) => _select(
+    "kind in ('belongsToHouse', 'wifeOfHouse') "
+    "and status in ('active', 'pending') "
+    'order by coalesce(seq, 1 << 40) desc, id limit $n',
+  );
+
   Future<List<ClaimRow>> undoableMerges() => _select('''
     kind = 'merge' and status = 'effective' and id not in (
       select subject_id from row where kind = 'unmerge'

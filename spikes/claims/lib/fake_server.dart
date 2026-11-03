@@ -39,10 +39,16 @@ enum ServerMode {
   /// person, so undo cannot restore them.
   rewriteOnMerge,
 
-  /// Not broken: an alternative rule for comparison. The same asserter
-  /// naming their own standing claim as base supersedes it even when other
-  /// accounts' claims also stand on the key (Task 8 requires exactly one).
+  /// Not broken: the rule the controller ruled Task 8 will use. The same
+  /// asserter naming their own active claim as base supersedes it even when
+  /// other accounts' claims also stand on the key. [correct] is the Task 8
+  /// text ("exactly one active"), kept as the compared baseline.
   supersedeOwnUnderContest,
+
+  /// Broken, built on [supersedeOwnUnderContest]: a claim whose base is on
+  /// the server but no longer active (a stale base) supersedes the
+  /// asserter's current active claim on the key, which it never named.
+  staleBaseSupersedesHead,
 }
 
 class FakeServer {
@@ -64,6 +70,8 @@ class FakeServer {
   // Counters for the report.
   int supersessions = 0;
   int lateBaseSupersessions = 0;
+  int lateBaseViaInactive = 0; // the naming row was itself already superseded
+  int staleBase = 0; // base is on the server but not active
   int ownReplaceKeptByContest = 0;
   int conflictedMerges = 0;
   int duplicateAcks = 0;
@@ -174,7 +182,8 @@ class FakeServer {
     } else if (active.any(
       (r) => r.id == c.baseClaimId && r.assertedBy == c.assertedBy,
     )) {
-      if (mode == ServerMode.supersedeOwnUnderContest) {
+      if (mode == ServerMode.supersedeOwnUnderContest ||
+          mode == ServerMode.staleBaseSupersedesHead) {
         _setStatus(c.baseClaimId!, Status.superseded);
         supersessions++;
       } else {
@@ -183,10 +192,33 @@ class FakeServer {
         ownReplaceKeptByContest++;
       }
     }
-    final replacedAlready = active.any(
-      (r) => r.assertedBy == c.assertedBy && r.baseClaimId == c.id,
-    );
-    if (replacedAlready) lateBaseSupersessions++;
+    final base = c.baseClaimId == null ? null : _rows[c.baseClaimId];
+    if (base != null && base.status != Status.active) {
+      // Stale base: the claim the asserter saw has moved on. It competes.
+      staleBase++;
+      if (mode == ServerMode.staleBaseSupersedesHead) {
+        final own = active.where((r) => r.assertedBy == c.assertedBy).toList()
+          ..sort((x, y) => x.seq!.compareTo(y.seq!));
+        if (own.isNotEmpty) _setStatus(own.last.id, Status.superseded);
+      }
+    }
+    // Late base: any row by the same asserter on the same key, whatever its
+    // status, that already names this claim as base. Covers chains P<-Q<-R
+    // where Q was itself superseded before P arrived.
+    final namers = _rows.values
+        .where(
+          (r) =>
+              r.isClaim &&
+              contestKey(r) == key &&
+              r.assertedBy == c.assertedBy &&
+              r.baseClaimId == c.id,
+        )
+        .toList();
+    final replacedAlready = namers.isNotEmpty;
+    if (replacedAlready) {
+      lateBaseSupersessions++;
+      if (namers.every((r) => r.status != Status.active)) lateBaseViaInactive++;
+    }
     _store(
       c.withServer(
         status: replacedAlready ? Status.superseded : Status.active,

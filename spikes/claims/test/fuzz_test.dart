@@ -22,19 +22,30 @@ final controlSeeds = seeds.take(5).toList();
 void main() {
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
 
-  group('correct server, 1,000 operations per seed', () {
-    for (final seed in seeds) {
-      test('seed $seed', () async {
-        final r = await runFuzz(FuzzConfig(seed: seed));
-        print(r.summary());
-        expect(
-          r.passed,
-          isTrue,
-          reason: 'seed $seed failed. ${r.config.replay}',
-        );
-      });
-    }
-  });
+  // Mode `correct` (the default, used by every group except the second) is
+  // the Task 8 text rule. `supersedeOwnUnderContest` is the rule the
+  // controller ruled Task 8 will use.
+  for (final (name, mode) in [
+    ('correct server (Task 8 text rule, baseline)', ServerMode.correct),
+    (
+      'ruled rule: supersedeOwnUnderContest',
+      ServerMode.supersedeOwnUnderContest,
+    ),
+  ]) {
+    group('$name, 1,000 operations per seed', () {
+      for (final seed in seeds) {
+        test('seed $seed', () async {
+          final r = await runFuzz(FuzzConfig(seed: seed, mode: mode));
+          print(r.summary());
+          expect(
+            r.passed,
+            isTrue,
+            reason: 'seed $seed failed. ${r.config.replay}',
+          );
+        });
+      }
+    });
+  }
 
   group('negative controls (the fuzz must fail)', () {
     final controls = <(String, FuzzConfig Function(int), String)>[
@@ -52,6 +63,11 @@ void main() {
         'server rewrites references on merge',
         (s) => FuzzConfig(seed: s, mode: ServerMode.rewriteOnMerge),
         a3,
+      ),
+      (
+        'stale base supersedes the asserter\'s current claim',
+        (s) => FuzzConfig(seed: s, mode: ServerMode.staleBaseSupersedesHead),
+        a2,
       ),
       (
         'client queue blocks behind a failing row',
