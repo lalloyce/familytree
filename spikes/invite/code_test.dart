@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
@@ -78,10 +79,30 @@ void main() {
   test('substitution and adjacent swap are caught over many tokens', () {
     var subs = 0;
     var swaps = 0;
-    // Deterministic spread of tokens across the value range.
+    // 500 tokens drawn with a fixed seed: eight random base-31 digits each, so
+    // values are spread uniformly over [0, 31^8) and are reproducible.
+    final rng = Random(20261103);
+    final codes = <String>[];
     for (var i = 0; i < 500; i++) {
-      final value = (i * 1708911) % 852891037441; // 31^8 = 852891037441
-      final code = encodeInviteCode(token5FromValue(value));
+      var value = 0;
+      for (var d = 0; d < 8; d++) {
+        value = value * 31 + rng.nextInt(31);
+      }
+      codes.add(encodeInviteCode(token5FromValue(value)));
+    }
+    // Guard against a silent regression to a narrow range: with a uniform
+    // spread, the 31 x 31 = 961 possible two-symbol prefixes are mostly hit.
+    expect(
+      codes.map((c) => c.substring(0, 2)).toSet().length,
+      greaterThan(100),
+    );
+    var expectedSwaps = 0;
+    for (final code in codes) {
+      for (var pos = 0; pos < 8; pos++) {
+        if (code[pos] != code[pos + 1]) expectedSwaps++;
+      }
+    }
+    for (final code in codes) {
       expect(isValidInviteCode(code), isTrue);
       for (var pos = 0; pos < 9; pos++) {
         for (final sym in alphabet.split('')) {
@@ -102,7 +123,10 @@ void main() {
       }
     }
     expect(subs, 500 * 270);
-    expect(swaps, 3349); // adjacent pairs of different symbols
+    expect(swaps, expectedSwaps);
+    expect(swaps, greaterThan(0));
+    // ignore: avoid_print
+    print('swap test: $subs substitutions, $swaps swaps, all rejected');
   });
 
   test('every adjacent swap of every different symbol pair is rejected', () {

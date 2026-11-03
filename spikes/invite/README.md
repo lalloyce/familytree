@@ -9,7 +9,7 @@ Question: can an inviter hand over a relationship with no signal, can the invite
 ## Layout
 
 - `code.dart`, `code_test.dart`: the invite code. Standalone Dart, no Flutter. Graduates to M3.
-- `lib/`: pure-Dart invite logic over an injectable network (`InviteNetwork`, with `FakeInviteNetwork` for tests): `TokenPool`, `Inviter.bindClaim`, `Redeemer` (typed-code entry, redeem queue). `lib/code.dart` is a symlink to `../code.dart`, because a package's `lib/` cannot import a file outside `lib/`.
+- `lib/`: pure-Dart invite logic over an injectable network (`InviteNetwork`, with `FakeInviteNetwork` for tests): `TokenPool`, `Inviter.bindClaim`, `Redeemer` (typed-code entry, redeem queue). `lib/code.dart` is a symlink to `../code.dart`, because a package's `lib/` cannot import a file outside `lib/`. It is a git symlink: M3 must `git mv` the real `spikes/invite/code.dart` and `code_test.dart` to their M3 home and drop the symlink. On a Windows checkout without `core.symlinks` the symlink degrades to a text file containing the path.
 - `test/`: the matrix simulation (`matrix_test.dart`) and unit tests (`invite_logic_test.dart`).
 - `app/`: a minimal Flutter Android app with two screens (create invite, enter code) over the logic and the fake network.
 - `matrix.md`: the five rows, the Dart results and the on-device procedure.
@@ -34,14 +34,21 @@ An invite code is 8 token symbols plus 1 check symbol from a 31-symbol alphabet 
 
 **Property tests run** (`code_test.dart`):
 - Single substitution, one fixed code: all 9 positions (8 token + check) x 30 other symbols = **270 of 270 rejected**.
-- The same over **500 codes** spread across the token range: **135,000 of 135,000 rejected**.
-- Adjacent swap, one fixed code: **8 of 8** adjacent pairs differ and **8 of 8 rejected**. Over the 500 codes, **3,349** adjacent different-symbol swaps, **3,349 rejected**.
+- The same over **500 codes** drawn with a fixed seed (`Random(20261103)`, eight random base-31 digits each, so spread over [0, 31^8)): **135,000 of 135,000 rejected**. The test asserts the codes' first-two-symbol prefixes take more than 100 distinct values, so a narrow range cannot pass unnoticed.
+- Adjacent swap, one fixed code: **8 of 8** adjacent pairs differ and **8 of 8 rejected**. Over the 500 codes, **3,882** adjacent different-symbol swaps (the test computes this count from the generated codes), **3,882 rejected**.
 - Exhaustive adjacent swap at token positions 0 to 6 (rest of the code fixed): all 31 x 30 ordered different pairs at each of the 7 positions = **6,510 of 6,510 rejected**.
 - Swaps of two equal symbols are not tested: they do not change the code.
 
 **What the checksum does not catch** (inferred from the formula, not tested): two or more wrong symbols can cancel (about 1 in 31 for random double errors), and swaps of non-adjacent symbols can pass. A code that passes the checksum can still be a token the server never issued. The server refuses those at redemption (tested).
 
 **Token capacity.** A 5-byte token has 40 bits, but 8 base-31 symbols hold 31^8 = 852,891,037,441 values (about 39.6 bits), and 2^40 = 1,099,511,627,776 is larger. `encodeInviteCode` reduces the token modulo 31^8. The brief did not specify how 40 bits map to 31-symbol digits. The server must issue only tokens below 31^8 (`isCanonicalToken5`); `FakeInviteNetwork` does. Then encoding is one-to-one and `decodeInviteCode` returns the same bytes (tested). M3 should settle this with the real token format, for example by issuing 8-symbol values directly.
+
+## Open decisions for the founder
+
+Reviewer and implementer observations, not decisions.
+
+- **(a) Flow 4 claim visibility.** After redeeming and before confirmation, the redeemer sees the inviter's name and the claim text ("cousin of Otieno through his father"), as design flow 4 says. Design section 9 says the redeemer sees nothing of the tree until confirmation, and the claim names a tree person. Options: show the inviter's name only until confirmation; show the claim with the named relative redacted; or as built. No test currently pins the choice.
+- **(b) Token width.** 31^8 is about 39.6 bits, so the brief's 40-bit token is reduced modulo 31^8, which is not injective. M3 must issue 8-symbol values directly or make encode throw on a non-canonical token. M3 must also persist the token pool and the outbox atomically with `take()`, and must not clear the outbox after an `await` (a binding added during the upload would be lost).
 
 ## Findings for the design
 
