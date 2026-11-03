@@ -27,7 +27,7 @@ flutter test
 
 ## Decisions
 
-Plan decisions A to G fill gaps in the design. Task 7 writes them into the design document (section 13) so the founder can accept or change them.
+Plan decisions A to H fill gaps in the design. Task 7 writes them into the design document (section 13) so the founder can accept or change them.
 
 - **A.** `person` gets a nullable `sex` ("son of" versus "daughter of"; unknown reads "child of"). The design's table sketch has no such field.
 - **B.** `house` gets a nullable `ordinal` (house 2). A house can exist with a known number and an unknown wife ("houses 1 and 3 are unknown").
@@ -36,6 +36,7 @@ Plan decisions A to G fill gaps in the design. Task 7 writes them into the desig
 - **E.** When a person's parentage is disputed or cyclic, the chain stops at that person with "accounts differ".
 - **F.** In M1 a `joined` basis displays as the neutral "belongs to". Showing the word "joined" waits for audience rules in M4. This settles the design's "known tension" for M1 only.
 - **G.** `person_name(person_id, name, kind)` holds spelling variants and extra names (design edge case 12). `person.name_key` is the primary display name.
+- **H.** In M1 the person who is "me" is kept in a local, never-synced `app_setting` row (Drift table `AppSettings`); from M2 it comes from the link between the account and its person.
 
 Setup decisions (Task 0):
 
@@ -85,5 +86,8 @@ Awaiting the founder:
 1. Review `docs/spike-results.md` and answer its three proposals and seven open questions. The plan for M2 to M6 is written only after this review.
 2. Task 1: paper test with relatives. The founder runs it. The script is `docs/paper-test.md`. No interviews are recorded yet.
 3. Name the weakest test phone and record its model, RAM and Android version above. It unlocks the spike 3 on-device matrix, the spike 4 layout and frame timing, and the spike 5 cold start, update survival and backup and restore. Procedures are in each spike's README.
+4. Task 13 step 5: run the app on the weakest phone and enter your own first-run household by hand, then note anything awkward here. The app is prepared (`cd app && flutter run`); this has not been done.
 
-Later: tasks add the claims, household and tree logic on top of the Drift schema in `app/lib/data/tables.dart` and `app/lib/data/database.dart` (Task 7, done).
+Built and committed locally: the Drift schema, claims, household builder, ancestor query, sibling groups, spoken chain, theme, chain and house views (Tasks 7 to 13a). Task 13b adds the first-run screen, the family tab, the app root (`app/lib/app.dart`, `main.dart`) and the local self-person setting. The app has not been run on a phone or emulator.
+
+M2 must do first: M1 claims are written with `assertedBy = 'local'` (`localAccountId` in `app/lib/app.dart`), and people and houses with `createdBy = 'local'`. Before the first edit or sync, M2 must, in one transaction, rewrite `'local'` to the real account id in `persons.createdBy`, `houses.createdBy`, `claims.assertedBy` and `field_edits.assertedBy`, and link the account to its person. Otherwise a user's own M1 claims read as another account's (decision D) and would show "accounts differ" against themselves. The id `'local'` must never be uploaded.

@@ -33,3 +33,14 @@ void expectTextScale(WidgetTester tester, double scale) {
   final BuildContext context = tester.element(find.byType(Scaffold));
   expect(MediaQuery.textScalerOf(context).scale(10), 10 * scale);
 }
+
+/// Lets real database work finish, then draws the result. Drift runs on real
+/// time, outside the test's fake clock, so a plain pump would not wait for it.
+Future<void> settle(WidgetTester tester) async {
+  for (int i = 0; i < 3; i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pump();
+  }
+}

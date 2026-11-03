@@ -16,6 +16,11 @@ class HouseholdBuilder {
   final ClaimService _claims;
   final String accountId;
 
+  /// Runs [body] in one database transaction: everything it writes commits
+  /// together, or none of it does when it throws. Transactions nest, so the
+  /// builder's own methods can be called inside.
+  Future<T> atomically<T>(Future<T> Function() body) => _db.transaction(body);
+
   /// Adds a person and returns their id. [name] becomes `nameKey`, the primary
   /// display name; it may be null.
   Future<String> addPerson({String? name, Sex? sex}) {

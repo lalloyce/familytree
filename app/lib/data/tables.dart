@@ -91,3 +91,14 @@ class FieldEdits extends Table {
   TextColumn get value => text().nullable()();
   TextColumn get assertedBy => text()();
 }
+
+/// Settings that belong to this device only. Never synced: nothing here is a
+/// claim, and no server table mirrors it. Today it holds `selfPersonId`.
+@DataClassName('AppSettingRow')
+class AppSettings extends Table {
+  TextColumn get key => text()();
+  TextColumn get value => text()();
+
+  @override
+  Set<Column> get primaryKey => {key};
+}

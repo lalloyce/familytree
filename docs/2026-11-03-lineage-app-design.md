@@ -143,6 +143,7 @@ person_alias(alias_id, canonical_id)       -- merges
 merge_event(id, a, b, evidence, confirmed_by_a, confirmed_by_b, reverses_event_id)
 dispute_response(id, subject_id, kind, respondent_id, chosen_claim_id, created_at)
 privacy_setting(person_id, hide_quiet_details)
+app_setting(key, value)                    -- local only, never synced; M1 keeps "who is me" here
 operator_access_log(id, operator, table_name, at)
 ```
 - IDs are client-generated UUIDs. A name is never an identity.
@@ -261,6 +262,7 @@ The UX Architect and the engineering reports produced these. They are reasoning,
 - **E. When a person's parentage is disputed or cyclic, the chain stops at that person with "accounts differ".**
 - **F. In M1 a `joined` basis displays as the neutral "belongs to".** Showing the word "joined" waits for the audience rules in M4. This settles the "known tension" in section 8 for M1 only.
 - **G. `person_name(person_id, name, kind)` holds spelling variants and extra names** (edge case 12). `person.name_key` is the primary display name.
+- **H. In M1 the person who is "me" is kept in a local, never-synced `app_setting` row; from M2 it comes from the link between the account and its person.**
 
 ## 14. Verification status
 
