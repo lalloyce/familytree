@@ -85,6 +85,15 @@ void main() {
             isTrue,
             reason: 'negative control passed: the fuzz has no teeth here',
           );
+          if (target == a3) {
+            // A3 must fail through non-cascade pairs, which the real server
+            // never produces; cascade pairs alone would prove nothing.
+            expect(
+              r.stats['undoPairsNonCascade'] as int,
+              greaterThan(0),
+              reason: 'A3 control failed without non-cascade pairs',
+            );
+          }
         });
       }
     }
