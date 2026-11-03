@@ -23,7 +23,7 @@ flutter test
 - The Dart package is `related`; the Android application ID is `ke.related.app` (from `flutter create --org ke.related ... app`).
 - `app/lib/data/app_database.g.dart` is generated and committed, so a fresh checkout compiles without running codegen. Regenerate it after any change to a Drift table.
 - `flutter config --android-sdk` was not needed: Flutter finds the SDK through `ANDROID_HOME`.
-- Weakest test phone: not yet named. Needed before Task 4 step 5.
+- Weakest test phone: not yet named. Needed for every awaiting-phone measurement (see Next and [spike-results.md](spike-results.md)).
 
 ## Decisions
 
@@ -63,6 +63,11 @@ Read from the tools on 2026-11-03.
 | uuid | ^4.6.0 | `app/pubspec.yaml` |
 | drift_dev (dev) | ^2.35.2 | `app/pubspec.yaml` |
 | build_runner (dev) | ^2.17.1 | `app/pubspec.yaml` |
+| PostgreSQL (spike 1) | 16.15, Homebrew `postgresql@16` | `spikes/leak/README.md`, read from the tools on 2026-11-03 |
+| sqlite3 (spikes 1, 2 and 5) | 3.8.0 | `spikes/leak/README.md`, `spikes/claims/README.md`, `spikes/crypto/README.md` (`pubspec.lock`) |
+| flutter_secure_storage (spike 5) | 11.2.0 | `spikes/crypto/README.md` (`pubspec.lock`) |
+| SQLite3MultipleCiphers, SQLite (spike 5) | 2.6.1, 3.54.0 | `spikes/crypto/README.md`, observed from the linked library |
+| CMake (Android SDK) | 3.22.1, installed by Gradle during `flutter build apk --debug` in spike 5 | `spikes/crypto/README.md`; NDK 28.2.13676358 was already present |
 
 `flutter doctor` on 2026-11-03:
 
@@ -73,6 +78,12 @@ Read from the tools on 2026-11-03.
 
 ## Next
 
-1. Task 1: paper test with relatives. The founder runs it. Script goes in `docs/paper-test.md`.
-2. Name the weakest test phone and record its model and RAM above. Needed before Task 4 step 5.
-3. Later tasks add the Drift tables (Task 7). `AppDatabase` in `app/lib/data/app_database.dart` has an empty schema for now.
+Done: spikes 1 to 5 are built and committed (`spikes/`). Results, findings and three proposed decisions are in [spike-results.md](spike-results.md). Every phone cell there reads "awaiting phone". The host-machine numbers are a proxy, not a weak-phone result.
+
+Awaiting the founder:
+
+1. Review `docs/spike-results.md` and answer its three proposals and seven open questions. The plan for M2 to M6 is written only after this review.
+2. Task 1: paper test with relatives. The founder runs it. The script is `docs/paper-test.md`. No interviews are recorded yet.
+3. Name the weakest test phone and record its model, RAM and Android version above. It unlocks the spike 3 on-device matrix, the spike 4 layout and frame timing, and the spike 5 cold start, update survival and backup and restore. Procedures are in each spike's README.
+
+Later: tasks add the Drift tables (Task 7). `AppDatabase` in `app/lib/data/app_database.dart` has an empty schema for now.
