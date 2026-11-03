@@ -62,20 +62,7 @@ Do not suggest an answer to any of them.
 
 **Goal:** find out whether a person can read the house idea from paper, and how long it takes.
 
-**Step 1.** Show this page to the person. Hand it over. Do not read it aloud.
-
----
-
-**WINYO had four wives. Each wife and her children make one house.**
-
-| House | Wife | Children |
-|---|---|---|
-| House 1 | not known yet | not known yet |
-| House 2 | Atieno Nyang'or | Manyi, Wade |
-| House 3 | not known yet | not known yet |
-| House 4 | not known | Owala |
-
----
+**Step 1.** Hand the person the participant card from the last section of this document. Show the card only. Do not show this page, and do not read the card aloud.
 
 **Step 2.** Start the timer. Ask:
 
@@ -89,7 +76,7 @@ Stop the timer when the person gives an answer. Write down the answer and the se
 
 Stop the timer at the answer. Write down the answer and the seconds.
 
-For your own reference: the answer to the first question is Wade (same house, same mother). The answer to the second is Owala (same father, different house). Winyo's other sons, if any, are in houses 1 and 3, which are not known.
+For your own reference: the answer to the first question is Wade (same house, same mother). The answer to the second is Owala (same father, different house).
 
 **Step 4.** After both answers, ask:
 
@@ -249,3 +236,22 @@ ________________________________________________________________
 ________________________________________________________________
 
 **Total time for the session (minutes):** ______
+
+---
+
+## Participant card (print and cut out)
+
+**Print and cut out. Show this card only.** Do not hand over any other page of this document.
+
+---
+
+**WINYO had four wives. Each wife and her children make one house.**
+
+| House | Wife | Children (known so far) |
+|---|---|---|
+| House 1 | not known yet | not known yet |
+| House 2 | Atieno Nyang'or | Manyi, Wade |
+| House 3 | not known yet | not known yet |
+| House 4 | not known | Owala |
+
+---
