@@ -67,7 +67,7 @@ These fill gaps in the design. Task 7 writes all of them into the design documen
 - **A.** `person` gets a nullable `sex` ("son of" versus "daughter of"; unknown reads "child of"). The design's table sketch has no such field.
 - **B.** `house` gets a nullable `ordinal` (house 2). A house can exist with a known number and an unknown wife ("houses 1 and 3 are unknown").
 - **C.** A wife's membership is a `wifeOfHouse` claim (displayed "married"). `belongsToHouse` carries only the basis `bornTo` or `joined`. This keeps "child of one house" single-valued and "wife of several houses" multi-valued.
-- **D.** One person replacing another person's claim never supersedes it. Both stay active and show "Accounts differ". Only the same asserter, with the current claim as their base, supersedes their own claim. This follows the anti-goal that persistence must not win by volume.
+- **D.** One person replacing another person's claim never supersedes it. Both stay active and show "Accounts differ". An asserter replacing their own active claim, where `baseClaimId` equals that claim's id, supersedes it even when other accounts' claims on the same contest key are active; the other accounts' claims stay active. Replacing another account's claim never supersedes it. This follows the anti-goal that persistence must not win by volume.
 - **E.** When a person's parentage is disputed or cyclic, the chain stops at that person with "accounts differ".
 - **F.** In M1 a `joined` basis displays as the neutral "belongs to". Showing the word "joined" waits for audience rules in M4. This settles the design's "known tension" for M1 only.
 - **G.** `person_name(person_id, name, kind)` holds spelling variants and extra names (design edge case 12). `person.name_key` is the primary display name.
@@ -224,13 +224,14 @@ Everything in M1 is local. No server, no sign-in, no encryption (spike 5 decides
   - `first claim is active and not competing`.
   - `same asserter replacing own claim with the current claim as base supersedes it`: assert A to house H1, then A to H2 with base = first; `activeClaims` returns only the second; the first row still exists with status `superseded`.
   - `a different asserter replacing a claim never supersedes it` (decision D): asserters A and B, B's base is A's claim; both are active and both have `competing == true`.
+  - `own claim is superseded even when another account's claim is active` (decision D): A asserts H1, B asserts H2 with base null (both active), then A asserts H3 with base = A's first claim; A's first is `superseded`, B's H2 and A's H3 are active and competing.
   - `a stale base becomes a competing claim`: A asserts, B asserts with base null; both active, both competing.
   - `wifeOfHouse competes by house`: two different women asserted as wife of the same house are competing; one woman asserted as wife of two houses is not.
   - `ordering ignores the device clock`: `now` returns decreasing timestamps; the second asserted claim is the active head after supersession.
   - `no claim row is ever updated except status`: after five assertions, compare all columns except status for the first row before and after.
 - [ ] **Step 2: Run to see it fail.** Run: `cd app && flutter test test/claims/claim_service_test.dart`. Expected: FAIL.
-- [ ] **Step 3: Implement `claim_kinds.dart` and `ClaimService`.** `assertClaim` runs in one transaction: find active claims with the same contest key; if exactly one exists, it was asserted by this account and `baseClaimId` equals its id, mark it `superseded`; in every other case insert and leave existing active claims alone.
-- [ ] **Step 4: Run to see it pass.** Expected: PASS (7 tests).
+- [ ] **Step 3: Implement `claim_kinds.dart` and `ClaimService`.** `assertClaim` runs in one transaction: find active claims with the same contest key; if one of them was asserted by this account and its id equals `baseClaimId`, mark that one `superseded`; in every other case leave existing active claims alone; then insert the new claim.
+- [ ] **Step 4: Run to see it pass.** Expected: PASS (8 tests).
 - [ ] **Step 5: Propose commit** `feat(claims): append-only claims with competing accounts`.
 
 ### Task 9: HouseholdBuilder and unknown parentage
