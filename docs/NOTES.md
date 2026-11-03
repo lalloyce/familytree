@@ -135,11 +135,11 @@ Awaiting the founder:
 
 Next: the founder reviews `docs/spike-results.md` and answers its open questions, then M2 to M6 are planned from it. The M2 to M6 plan is not written yet; the plan says it is written only after that review.
 
-M2 must do first: M1 claims are written with `assertedBy = 'local'` (`localAccountId` in `app/lib/app.dart`), and people and houses with `createdBy = 'local'`. Before the first edit or sync, M2 must, in one transaction, rewrite `'local'` to the real account id in `persons.createdBy`, `houses.createdBy`, `claims.assertedBy` and `field_edits.assertedBy`, and link the account to its person. Otherwise a user's own M1 claims read as another account's (decision D) and would show "accounts differ" against themselves. The id `'local'` must never be uploaded. M2 must also move or reset the unencrypted M1 database file, and bump the Drift schema version with a migration, because the app now writes to a database at schema version 1.
+M2 must do first: M1 claims are written with `assertedBy = 'local'` (`localAccountId` in `app/lib/app.dart`), and people and houses with `createdBy = 'local'`. Before the first edit or sync, M2 must, in one transaction, rewrite `'local'` to the real account id in `persons.createdBy`, `houses.createdBy`, `claims.assertedBy` and `field_edits.assertedBy`, and link the account to its person. Otherwise a user's own M1 claims read as another account's (decision D) and would show "accounts differ" against themselves. The id `'local'` must never be uploaded. M2 must also move or reset the unencrypted M1 database file, and bump the Drift schema version with a migration, because once the app has run on a device it will have written a database at schema version 1.
 
 ## Known limits at M1 exit
 
 - `localSeq` is local to each device, so "earliest by arrival" can differ between devices after M2 sync.
 - The houses of the aunt's husbands are not reachable from the app in M1: the family tab shows only the father's houses. The case is covered at model and widget level.
 - A chain longer than the 60-step cap ends with a last line that reads "son of someone we forgot". This is known and unlikely.
-
+- The dashed outline around "someone we forgot" is laid out separately from the text. With the phone's bold-text or text-spacing accessibility settings on, the outline can sit slightly off the words (reasoned from Flutter's source and one probe; the label and text are unaffected). Child lines for a placeholder child are not outlined.
