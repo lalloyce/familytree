@@ -8,10 +8,16 @@ Throwaway. Question: do append-only claims survive offline edits from three devi
 - **A3's direct checks pass on every seed.** A merge then undo with nothing in between returns the exact pre-merge view on the server and all three devices.
 - **A3's replay check fails on any pair that is not explained.** Every merge later undone is replayed, none skipped.
   - **Raw figure: 2,837 of 12,779 replayed pairs (baseline) and 2,884 of 12,822 (ruled) give a view that differs at all from the merge-never-happened replay.**
-  - Of those that differ, 791 (baseline) and 823 (ruled) are explained by merges or undos refused inside the pair's window (Finding 3).
-  - 2,046 (72.1%) and 2,061 (71.5%) are **cascade** pairs (Finding 3b), under a causal definition computed from the arrival log.
+  - Of those that differ, 791 (baseline) and 823 (ruled) are accepted-interfering (Finding 3): every differing status is on a merge or undo row that touches the pair's people and arrived inside the pair's window, and those statuses fully explain the view difference.
+  - 2,046 (72.1%) and 2,061 (71.5%) are **cascade** pairs (Finding 3b). The cascade class is a shared-people taint over the arrival log, defined under A3 below. It requires that a seed row itself changed, but it does not prove causation.
   - **0** are non-cascade, so no failure fell outside the known class.
-- **What a cascade pair means: a merge refused while another merge stood is never retried when that merge is undone.** Its absence changes later merges and undos. Claim statuses are never affected. The replay uses no sync, so this is a property of the merge rule, not of the sync. It is a design question for M5: re-evaluate refused merges on undo, or treat everything after a refused merge as a review task.
+- **What a cascade pair shows.**
+  - A merge or undo that the server refused while the pair's merge stood is accepted in the replay where that merge never happened.
+  - In the real run it is never retried when the merge is undone.
+  - Every other differing row shares people, directly or through other tainted rows, with such a row.
+  - No claim status differs in any differing pair.
+
+  The mechanism is in the merge rule, and the replay itself uses no sync. The rate is different: the arrival order being replayed came from the sync's offline periods and reconnect order, so the sync does shape how often this happens. It is a design question for M5: re-evaluate refused merges on undo, or treat everything after a refused merge as a review task.
 - **Five deliberately broken variants** (four servers and one client) each fail the assertion they target on every seed tried. The A3 control fails through non-cascade pairs.
 
 The answer covers an in-memory fake server and in-memory devices, not Postgres, HTTP or real phones (see "What was NOT tested").
@@ -109,10 +115,17 @@ Then: phase 1, everyone online and no injected faults, with the poison still fai
   - (c) Every merge m later undone by u during the whole run (the epilogues included) is replayed; none is skipped. A fresh server receives every row in the same arrival order minus m and u. A replay of the whole log must reproduce the server's view, or A3 fails. Each pair is classified, and only non-cascade pairs fail A3:
     - **identical**: the replay's view equals the real one.
     - **accepted-interfering** (Finding 3): every row whose status differs between the replay and the whole-log replay is a merge or undo row that touches one of m's two people and arrived strictly between m and u, and putting those rows' real statuses back into the replay reproduces the real view exactly.
-    - **cascade** (Finding 3b): not accepted, but every row whose status differs is in the pair's taint set, and putting all differing statuses back reproduces the real view exactly. The taint set is computed from the real arrival log:
-      - Seeds are merge or undo rows that the server stored as `conflicted` while m stood (arriving strictly between m and u) and that touch one of m's people.
-      - Closure: in arrival order after the first seed, a merge or undo row is tainted if it touches a person of an already-tainted row, or if it undoes a tainted merge.
+    - **cascade** (Finding 3b): not accepted, but all three of these hold:
+      - every row whose status differs is in the pair's taint set;
+      - at least one seed row is itself among the rows whose status differs;
+      - putting all differing statuses back reproduces the real view exactly.
+
+      The taint set is computed from the real arrival log:
+      - **Seeds** are merge or undo rows that the server stored as `conflicted` while m stood (arriving strictly between m and u) and that touch one of m's people, whatever the reason for the refusal.
+      - **Closure:** in arrival order after the first seed, a merge or undo row is tainted if it shares a person with an already-tainted row, or if it undoes a tainted merge. The closure follows shared people only and does not prove that one row's outcome caused another's.
       - A claim row is never tainted, so a claim-status difference is never cascade.
+
+      The fuzz prints the taint-set size per pair as `taintMin`, `taintMax` and `taintMean` for each seed.
     - **non-cascade**: anything else, including a view difference with no row-status difference.
 
   The same definition is in the code comment above the A3 block in `lib/fuzz.dart`.
@@ -120,11 +133,11 @@ Then: phase 1, everyone online and no injected faults, with the poison still fai
 
 ## Results
 
-Final run of `dart test -r expanded -j 1` (fix round 3):
+Final run of `dart test -r expanded -j 1` (fix round 4):
 
 ```
-00:55 +65: All tests passed!
-dart test -r expanded -j 1  56.64s user 0.78s system 102% cpu 55.815 total
+00:52 +65: All tests passed!
+dart test -r expanded -j 1  53.71s user 0.77s system 102% cpu 52.989 total
 ```
 
 The 65 tests are 20 seeds under `correct`, 20 under `supersedeOwnUnderContest`, and 25 negative-control runs. Seed 1 from that run, baseline then ruled rule:
@@ -135,13 +148,13 @@ seed 1 mode=correct: PASS
   pass  A2 contested facts kept as competing accounts, never overwritten
   pass  A3 merge then undo returns the pre-merge view
   pass  A4 a failing push does not block later pushes
-  stats: {d0RowsAfterPoison: 302, ops: {editName: 196, assertClaim: 464, addPerson: 148, undo (none visible, asserted a claim instead): 3, merge: 93, undoMerge: 96}, rows: 1016, claims: 468, superseded: 23, lateBase: 1, lateBaseViaInactive: 0, lateArrivalsChecked: 1, staleBase: 27, ownReplaceKeptByContest: 119, contestedKeys: 36, selfDifferKeys: 71, conflictedMerges: 14, undoPairsReplayed: 68, undoPairsIdentical: 57, undoPairsAcceptedInterfering: 2, undoPairsCascade: 9, undoPairsNonCascade: 0, syncs: 211, toggles: 93, midPushDrops: 31, duplicatePushes: 20, pullDrops: 25, duplicateAcks: 205, poisonFailures: 56, ms: 1192}
+  stats: {d0RowsAfterPoison: 302, ops: {editName: 196, assertClaim: 464, addPerson: 148, undo (none visible, asserted a claim instead): 3, merge: 93, undoMerge: 96}, rows: 1016, claims: 468, superseded: 23, lateBase: 1, lateBaseViaInactive: 0, lateArrivalsChecked: 1, staleBase: 27, ownReplaceKeptByContest: 119, contestedKeys: 36, selfDifferKeys: 71, conflictedMerges: 14, undoPairsReplayed: 68, undoPairsIdentical: 57, undoPairsAcceptedInterfering: 2, undoPairsCascade: 9, undoPairsNonCascade: 0, taintMin: 0, taintMax: 41, taintMean: 4.1, syncs: 211, toggles: 93, midPushDrops: 31, duplicatePushes: 20, pullDrops: 25, duplicateAcks: 205, poisonFailures: 56, ms: 1377}
 seed 1 mode=supersedeOwnUnderContest: PASS
   pass  A1 zero lost writes
   pass  A2 contested facts kept as competing accounts, never overwritten
   pass  A3 merge then undo returns the pre-merge view
   pass  A4 a failing push does not block later pushes
-  stats: {d0RowsAfterPoison: 316, ops: {editName: 208, assertClaim: 423, addPerson: 160, undo (none visible, asserted a claim instead): 10, merge: 104, undoMerge: 95}, rows: 1016, claims: 434, superseded: 143, lateBase: 1, lateBaseViaInactive: 0, lateArrivalsChecked: 1, staleBase: 158, ownReplaceKeptByContest: 0, contestedKeys: 32, selfDifferKeys: 59, conflictedMerges: 16, undoPairsReplayed: 71, undoPairsIdentical: 58, undoPairsAcceptedInterfering: 4, undoPairsCascade: 9, undoPairsNonCascade: 0, syncs: 232, toggles: 109, midPushDrops: 33, duplicatePushes: 28, pullDrops: 23, duplicateAcks: 221, poisonFailures: 91, ms: 829}
+  stats: {d0RowsAfterPoison: 316, ops: {editName: 208, assertClaim: 423, addPerson: 160, undo (none visible, asserted a claim instead): 10, merge: 104, undoMerge: 95}, rows: 1016, claims: 434, superseded: 143, lateBase: 1, lateBaseViaInactive: 0, lateArrivalsChecked: 1, staleBase: 158, ownReplaceKeptByContest: 0, contestedKeys: 32, selfDifferKeys: 59, conflictedMerges: 16, undoPairsReplayed: 71, undoPairsIdentical: 58, undoPairsAcceptedInterfering: 4, undoPairsCascade: 9, undoPairsNonCascade: 0, taintMin: 0, taintMax: 38, taintMean: 3.3, syncs: 232, toggles: 109, midPushDrops: 33, duplicatePushes: 28, pullDrops: 23, duplicateAcks: 221, poisonFailures: 91, ms: 808}
 ```
 
 | Seeds | Mode | A1 | A2 | A3 | A4 |
@@ -183,7 +196,7 @@ seed 1 mode=supersedeOwnUnderContest: PASS
 | 19 | 67 | 44 | 9 | 14 | 0 | 68 | 55 | 3 | 10 | 0 |
 | 20 | 60 | 43 | 5 | 12 | 0 | 62 | 46 | 5 | 11 | 0 |
 
-**Other counters, per seed, minimum to maximum** (200-seed sweeps re-run in fix round 3):
+**Other counters, per seed, minimum to maximum** (200-seed sweeps re-run in fix round 4):
 
 | Counter | Ruled, seeds 1-20 | Baseline, seeds 1-20 | Ruled, 200 seeds | Baseline, 200 seeds |
 |---|---|---|---|---|
@@ -198,6 +211,8 @@ seed 1 mode=supersedeOwnUnderContest: PASS
 | A3 pairs accepted-interfering | 1 to 9 | 1 to 6 | 0 to 11 | 0 to 10 |
 | A3 pairs cascade | 6 to 15 | 5 to 16 | 1 to 18 | 4 to 18 |
 | A3 pairs non-cascade | 0 | 0 | 0 | 0 |
+| taint-set size per pair: largest in the seed (`taintMax`) | 35 to 164 | 23 to 138 | 18 to 171 | 23 to 175 |
+| taint-set size per pair: seed mean (`taintMean`) | 3.3 to 19.9 | 1.2 to 14.3 | 1.4 to 30.8 | 1.2 to 27.1 |
 
 In the 200-seed baseline sweep, also per seed: 416 to 499 claims; 25 to 47 contest keys with active claims from both accounts; 23 to 64 mid-push drops; 9 to 39 duplicate pushes; 12 to 43 lost pull responses; 114 to 351 duplicate acknowledgements; 7 to 44 conflicted merges; 282 to 371 `d0` rows written after the poison row, all delivered while it was failing.
 
@@ -240,8 +255,8 @@ FAIL  A4 a failing push does not block later pushes (2 violations; first: 334 d0
 
 ## Findings
 
-1. **Task 8's "exactly one active claim" rule stops people correcting themselves once a fact is contested. Resolved by controller ruling.** Under the Task 8 text, once B disagrees with A, A's correction no longer supersedes A's earlier claim, so A ends up with two standing accounts of their own: 119 to 149 times per seed on seeds 1 to 20 under `correct`. The controller has ruled that Task 8 will use `supersedeOwnUnderContest`: an asserter replacing their own active claim whose id equals `baseClaimId` supersedes it regardless of other accounts' claims; replacing another account's claim never supersedes it. That mode passes all four assertions on seeds 1 to 20 in `dart test` and on 200 seeds in the sweep, with 0 own replacements kept active. It has cascade pairs at the same rate as the baseline (Finding 3b), which does not depend on the contest rule, and no non-cascade pairs.
-2. **A row that is overtaken can arrive after its own replacement.** A non-blocking queue means the stuck row reaches the server after newer rows. If the asserter had already replaced it, the plain rule would store it as active and show a spurious "accounts differ" from one person. The fake server checks every claim by the same account on the same key, whatever its status. If any of them already names the arriving claim as its base, the arriving claim is stored as superseded. This covers chains P, Q, R where Q was itself superseded by R before P arrived (seen 4 times in the 200-seed ruled sweep). A2 asserts that no such late claim stands. In the fix-round-3 sweeps the rule fired once on each of the 200 ruled seeds, and once on 199 of the 200 baseline seeds (`lateBase` 0 to 1). `lateArrivalsChecked` has the same counts, and every checked late claim was superseded. The design should state this rule.
+1. **Task 8's "exactly one active claim" rule stops people correcting themselves once a fact is contested. Resolved by controller ruling.** Under the Task 8 text, once B disagrees with A, A's correction no longer supersedes A's earlier claim, so A ends up with two standing accounts of their own: 119 to 149 times per seed on seeds 1 to 20 under `correct`. The controller has ruled that Task 8 will use `supersedeOwnUnderContest`: an asserter replacing their own active claim whose id equals `baseClaimId` supersedes it regardless of other accounts' claims; replacing another account's claim never supersedes it. That mode passes all four assertions on seeds 1 to 20 in `dart test` and on 200 seeds in the sweep, with 0 own replacements kept active. Its cascade rate is close to the baseline's (Finding 3b): cascade pairs are 16.1% of replayed pairs under the ruled rule and 16.0% under the baseline in the 200-seed sweeps. This was observed, not tested directly. It has no non-cascade pairs.
+2. **A row that is overtaken can arrive after its own replacement.** A non-blocking queue means the stuck row reaches the server after newer rows. If the asserter had already replaced it, the plain rule would store it as active and show a spurious "accounts differ" from one person. The fake server checks every claim by the same account on the same key, whatever its status. If any of them already names the arriving claim as its base, the arriving claim is stored as superseded. This covers chains P, Q, R where Q was itself superseded by R before P arrived (seen 4 times in the 200-seed ruled sweep). A2 asserts that no such late claim stands. In the fix-round-4 sweeps the rule fired once on each of the 200 ruled seeds, and once on 199 of the 200 baseline seeds (`lateBase` 0 to 1). `lateArrivalsChecked` has the same counts, and every checked late claim was superseded. The design should state this rule.
 3. **A merge or undo refused while a merge stands stays refused after the undo.** A merge or undo that arrives while one of its people is merged away is stored as conflicted, and it stays conflicted after the undo, although without the first merge it might have taken effect. Pairs whose only difference is such in-window rows, and whose view difference those rows fully explain, are accepted-interfering: 791 (baseline) and 823 (ruled) in the 200-seed sweeps. Section 8's "becomes a review task" must cover conflicted merges and undos, not only references to the merged identity.
 
 3b. **A merge refused while another merge stood is never retried when that merge is undone, and the effect spreads.** This is the cascade class (definition in A3 above). The refused merge's absence changes later merges and undos, after the undo and sometimes on other people linked through them.
@@ -253,7 +268,12 @@ Raw and explained figures over the 200-seed sweeps:
 | Baseline | 12,779 | 2,837 | 2,046 | 791 | 0 |
 | Ruled | 12,822 | 2,884 | 2,061 | 823 | 0 |
 
-Every cascade pair changes only merge and undo statuses, all in the taint set, and putting them back reproduces the real view exactly. No claim status differs in any pair.
+In every cascade pair:
+- only merge and undo statuses change, all of them in the taint set;
+- at least one seed is among them;
+- putting them back reproduces the real view exactly.
+
+No claim status differs in any differing pair. The taint sets can be wide: the largest seen held 175 merge and undo rows, in one seed of the baseline sweep.
 
 Examples, both from seed 1:
 - Baseline: pair merge `8a1a8ab7-b7cf-4863-a689-27862a2b55fb`, seq 102 to 194. Merge @126 inside the window was refused in the real run and takes effect in the replay. Merge @973 then takes effect in the real run and is refused in the replay.
@@ -263,7 +283,7 @@ The direct requirement, that a merge followed by undo returns the pre-merge view
 - re-evaluate refused merges and undos when a merge is undone, which can change outcomes people have already seen;
 - keep the current rule and make every refused merge or undo, and everything decided after it on the same people, a review task.
 
-The suite reports cascade pairs per seed and fails only on non-cascade pairs. A non-cascade pair on the real server would be recorded here as Finding 3c; none occurred. The replay uses no sync, so the choice of sync does not affect this.
+The suite reports cascade pairs per seed and fails only on non-cascade pairs. A non-cascade pair on the real server would be recorded here as Finding 3c; none occurred after the seed-must-change rule was added in fix round 4. The replay itself uses no sync, so the mechanism does not depend on the sync. The rate does: the arrival order being replayed came from the sync's offline periods and reconnect order.
 
 4. **Spike 1's pull cursor must also move on status changes** (inferred from reading `spikes/leak/README.md`, not tested together). Spike 1's per-account version moves only when an account's access changes. A claim being superseded changes its status, not its access, so a device on spike 1's cursor would never learn of it. M2 must give the status change a new version for every account that can see the claim.
 5. **The fake server's cursor would leak in production.** It is a position in one global change log, so its value counts every write, including hidden ones. Spike 1's per-account version does not have this problem; M2 should use that, not this.
@@ -283,11 +303,12 @@ The suite reports cascade pairs per seed and fails only on non-cascade pairs. A 
 - The id-conflict path (same id, different content): the server refuses it, but the fuzz never sends one, so the path never ran.
 - Outbox persistence across an app restart. Each device database is in memory and lives for one run.
 - Display of pending claims and pending name edits. The view counts confirmed rows only.
+- Limits of the undo check. The cascade class is shown to separate a view-level bug (the `rewriteOnMerge` control fails through non-cascade pairs), but no control shows it would catch a status-only merge or undo bug. An example would be a server that refuses any later merge involving a person who was ever merged away, even after the undo. Such a bug changes only merge and undo statuses near the pair's people, so it could land inside a taint set and be counted as cascade. The M5 implementation must have its own tests for retrying refused merges.
 - Contest keys that ignore merged identity. Keys use the raw person id, so while a and b are merged their `belongsToHouse` claims sit on separate keys and never supersede each other, yet the merged view lists them together and can show "accounts differ" across them.
 
 ## Effort
 
-**(a) My elapsed time.** Measured with `date` on 2026-11-03. First commit: 14:30:00 to 14:47:19 EAT, about 17 minutes and about 52 tool calls. Fix round 1: 14:54:42 to about 15:13 EAT, about 19 minutes and about 21 tool calls. Fix round 2: 15:16:46 to 15:28:47 EAT, about 12 minutes and about 21 tool calls. Fix round 3: 15:30:14 to 15:42 EAT, about 12 minutes and about 12 tool calls. Total about 60 minutes and about 106 tool calls. This is the time of an AI session that does not tire or switch context, and it is not a measure of the founder's working days.
+**(a) My elapsed time.** Measured with `date` on 2026-11-03. First commit: 14:30:00 to 14:47:19 EAT, about 17 minutes and about 52 tool calls. Fix round 1: 14:54:42 to about 15:13 EAT, about 19 minutes and about 21 tool calls. Fix round 2: 15:16:46 to 15:28:47 EAT, about 12 minutes and about 21 tool calls. Fix round 3: 15:30:14 to 15:42 EAT, about 12 minutes and about 13 tool calls. Fix round 4: 15:46:15 to about 15:55 EAT, about 9 minutes and about 10 tool calls. Total about 69 minutes and about 117 tool calls. This is the time of an AI session that does not tire or switch context, and it is not a measure of the founder's working days.
 
 **(b) Lines of Dart** (`wc -l`; in brackets, lines that are neither blank nor comments):
 
@@ -298,7 +319,7 @@ The suite reports cascade pairs per seed and fails only on non-cascade pairs. A 
 | `lib/device.dart`, the sync section alone (outbox, push, pull) | 135 | 114 |
 | `lib/model.dart` (row, results, interface, contest key, view) | 291 | 228 |
 | `lib/fake_network.dart` (fault injection, test only) | 69 | 52 |
-| `lib/fuzz.dart` (fuzz and assertions, test only) | 647 | 565 |
+| `lib/fuzz.dart` (fuzz and assertions, test only) | 664 | 578 |
 | `bin/fuzz.dart` (command line, test only) | 39 | 33 |
 | `test/fuzz_test.dart` (test groups, test only) | 101 | 83 |
 
