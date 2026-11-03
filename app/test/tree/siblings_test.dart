@@ -266,7 +266,7 @@ void main() {
             ),
   ];
 
-  test('the real scan examines the lib/tree sources', () {
+  test('the real scan examines the lib/tree and lib/ui sources', () {
     // A scan of nothing proves nothing.
     final files = scannedFiles();
     expect(files, isNotEmpty);
@@ -276,6 +276,12 @@ void main() {
     );
     expect(
       files.any((file) => file.path.endsWith('lib/tree/siblings.dart')),
+      isTrue,
+    );
+    // The screens are scanned too, not only the domain code.
+    expect(files.any((file) => file.path.contains('lib/ui/')), isTrue);
+    expect(
+      files.any((file) => file.path.endsWith('lib/ui/house_view.dart')),
       isTrue,
     );
   });

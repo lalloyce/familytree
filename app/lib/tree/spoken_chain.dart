@@ -1,8 +1,6 @@
 import '../data/database.dart';
 import 'ancestors.dart';
-
-const String _forgotten = 'someone we forgot';
-const String _unnamed = 'unnamed';
+import 'display_name.dart';
 
 /// One line of the spoken chain: a person and, unless the line ends the
 /// chain, their father.
@@ -69,14 +67,7 @@ Future<List<ChainLine>> spokenChain(AppDatabase db, String personId) async {
   };
 
   bool isPlaceholder(String id) => persons[id]?.isPlaceholder ?? false;
-  String nameOf(String id) {
-    final PersonRow? p = persons[id];
-    if (p != null && p.isPlaceholder) {
-      return _forgotten;
-    }
-    final String name = p?.nameKey?.trim() ?? '';
-    return name.isEmpty ? _unnamed : name;
-  }
+  String nameOf(String id) => displayName(persons[id]);
 
   final int last = people.length - 1;
   // The ancestor at the end has already been told as "of someone we forgot".
@@ -102,7 +93,7 @@ Future<List<ChainLine>> spokenChain(AppDatabase db, String personId) async {
       };
       final String father = i < steps.length
           ? nameOf(steps[i].personId)
-          : _forgotten;
+          : forgottenName;
       final int? ordinal = i < steps.length ? ordinals[steps[i].houseId] : null;
       text = ordinal == null
           ? '$name, $word of $father'
