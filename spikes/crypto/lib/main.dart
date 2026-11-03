@@ -38,6 +38,7 @@ Future<void> main() async {
     final line =
         'COLD_START_RESULT state=${result.state.name} '
         'reason=${result.reason?.name ?? '-'} people=${result.peopleCount} '
+        'quarantined=${result.quarantined.length} '
         'key_read_ms=${(result.keyRead.inMicroseconds / 1000).toStringAsFixed(1)} '
         'cold_start_ms=${(result.total.inMicroseconds / 1000).toStringAsFixed(1)} '
         'main_to_db_ready_ms=${dbReadyMs.toStringAsFixed(1)} '
@@ -45,13 +46,16 @@ Future<void> main() async {
         'process_to_first_frame_ms=${_processAgeMs() ?? '-'} '
         'first_frame_epoch_us=${DateTime.now().microsecondsSinceEpoch}';
     debugPrint(line);
-    if (result.state != StartState.returning && result.peopleCount == 0) {
-      await _seed(result.db);
+    final db = result.db;
+    if (db != null &&
+        result.state != StartState.returning &&
+        result.peopleCount == 0) {
+      await _seed(db);
     }
     if (autorun) {
       await File(p.join(dir.path, 'cold_start_result.txt'))
           .writeAsString('$line\n', mode: FileMode.append, flush: true);
-      await result.db.close();
+      await db?.close();
       exit(0);
     }
   });
@@ -111,8 +115,11 @@ class CryptoSpikeApp extends StatelessWidget {
             '${result.peopleCount} people.',
       StartState.resyncNeeded =>
         'The saved data on this phone could not be '
-            'opened. Sign in to download your family again. Anything that was '
-            'not yet sent is lost.',
+            'opened and has been set aside. Sign in to download your family '
+            'again. Anything that was not yet sent cannot be shown.',
+      StartState.keyReadFailed =>
+        'The phone did not let the app read its key just now. Nothing was '
+            'changed. Close the app and try again.',
     };
     return MaterialApp(
       title: 'Spike 5',

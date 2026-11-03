@@ -54,7 +54,7 @@ Future<void> main(List<String> args) async {
     form: form,
   );
   final since = sinceMain.elapsedMicroseconds;
-  await r.db.close();
+  await r.db?.close();
   stdout.writeln(
     'state=${r.state.name} people=${r.peopleCount} '
     'key_read_us=${r.keyRead.inMicroseconds} '

@@ -8,22 +8,23 @@ Throwaway. Design section 10, spike 5: "Cold start with an encrypted database: u
 
 - `lib/database.dart`: a Drift database (`SpikeDb`, one table `people`) and `openEncryptedDatabase(file, key)`. The key is applied with `PRAGMA key` in Drift's `setup` callback. Before that, `setup` checks `PRAGMA cipher` and throws `CipherMissingError` if SQLite3MultipleCiphers is not linked, so a build mistake can never create a plain database. After the key, `setup` reads `sqlite_master`, because SQLite3MultipleCiphers' `PRAGMA key` "return[s] `ok` even if the provided key isn't correct" (its pragma docs). `isNotADatabase(error)` recognises SQLITE_NOTADB (code 26) through Drift's isolate wrapper.
 - Two key forms, both tested: `KeyForm.passphrase` (`PRAGMA key = '<64 hex>'`, the Drift docs' form) and `KeyForm.raw` (`PRAGMA key = 'raw:<64 hex>'`, which the SQLite3MultipleCiphers docs describe as "converted directly to 32 bytes (256 bits) of key data"). The default is `passphrase`.
-- `lib/key_store.dart`: the `KeyStore` interface, `generateKey()` (32 bytes from `Random.secure()`, 64 hex characters), `MemoryKeyStore` (fake for host tests) and `PlainFileKeyStoreForTests` (a plain file, so a second process can read the key; test and benchmark only, never shipped).
-- `lib/secure_key_store.dart`: `SecureKeyStore`, backed by flutter_secure_storage with `AndroidOptions()` (the package default) and, for the Mac run only, `MacOsOptions(usesDataProtectionKeychain: false)`. A `PlatformException` on read is treated as "no key"; on write the store is cleared once and the write retried.
+- `lib/key_store.dart`: the `KeyStore` interface (`readKey` returns null only when no key is stored and throws `KeyReadException` when the store cannot be read), `isWellFormedKey`, `generateKey()` (32 bytes from `Random.secure()`, 64 hex characters), `MemoryKeyStore` (fake for host tests) and `PlainFileKeyStoreForTests` (a plain file, so a second process can read the key; test and benchmark only, never shipped).
+- `lib/secure_key_store.dart`: `SecureKeyStore`, backed by flutter_secure_storage with `AndroidOptions()` (the package default) and, for the Mac run only, `MacOsOptions(usesDataProtectionKeychain: false)`. A `PlatformException` on read becomes `KeyReadException` (not "no key"); on a failed write it deletes and rewrites only its own key name `db_key_v1`, once.
 - `lib/cold_start.dart`: `coldStart(keys, dbFile)`, the first-run versus returning-run flow:
 
   | Key stored? | Database file? | Outcome |
   |---|---|---|
+  | read failed, or stored value is not 64 hex characters | any | `keyReadFailed`: nothing opened, moved, deleted or written; try again later |
   | no | no | `firstRun`: generate key, store it, create empty encrypted database |
   | yes | yes, key opens it | `returning` |
-  | no | yes | `resyncNeeded` (`keyMissing`): delete the unreadable file, new key, clean database |
-  | yes | yes, key rejected | `resyncNeeded` (`keyRejected`): same fallback |
+  | no | yes | `resyncNeeded` (`keyMissing`): set the file aside, new key (none existed to overwrite), clean database |
+  | yes | yes, key rejected (SQLITE_NOTADB only) | `resyncNeeded` (`keyRejected`): set the file aside, keep the stored key unchanged and use it for the clean database |
   | yes | no | `resyncNeeded` (`databaseMissing`): clean database with the stored key |
 
-  The unreadable-data cases never throw to the caller. Any other error (disk full, a bug) is rethrown so it is not hidden.
-- `lib/main.dart`: the Flutter app. Opens the database before `runApp`, shows the state (the `resyncNeeded` text says to sign in and download the family again and that unsent work is lost), and after the first frame prints one `COLD_START_RESULT` line. On a first run (or after a fallback) it adds 3,000 synthetic people after the first frame, so later starts open a realistic database. With `--dart-define=AUTORUN=true` it also writes the line to `<application support dir>/cold_start_result.txt` and exits. On Linux and Android it adds `process_to_first_frame_ms`, read from `/proc/self/stat` and `/proc/uptime` (assumes 100 clock ticks per second; not checked on a phone).
+  "Set aside" (quarantine) renames `lineage.db` and any `-wal`, `-shm`, `-journal` files to `lineage.db.<UTC timestamp>.unreadable[-suffix]` next to it; `coldStart` never deletes a database. `StartResult.quarantined` lists the moved files. What still throws to the caller: an error from the first query that is not SQLITE_NOTADB (including `CipherMissingError`), a failure to write a new key in the `firstRun`/`keyMissing` paths, a failure to rename files, and a failure to open or query the clean database. Errors while closing a database that failed to open are ignored. The real app still has to decide how and when set-aside files are removed.
+- `lib/main.dart`: the Flutter app. Opens the database before `runApp`, shows the state (the `resyncNeeded` text says the data was set aside and to sign in and download the family again; the `keyReadFailed` text says nothing was changed and to try again), and after the first frame prints one `COLD_START_RESULT` line. On a first run (or after a fallback) it adds 3,000 synthetic people after the first frame, so later starts open a realistic database. With `--dart-define=AUTORUN=true` it also writes the line to `<application support dir>/cold_start_result.txt` and exits. On Linux and Android it adds `process_to_first_frame_ms`, read from `/proc/self/stat` and `/proc/uptime` (assumes 100 clock ticks per second; not checked on a phone).
 - `bin/cold_start_child.dart`: one cold start in a fresh `dart` process. `bin/cold_start_bench.dart`: runs the compiled child 40 times per key form.
-- `test/crypto_test.dart`: 15 host tests, listed below.
+- `test/crypto_test.dart`: 17 host tests, listed below.
 
 Not built: PowerSync, any sync, sign-in, iOS, and the real app's schema.
 
@@ -65,9 +66,11 @@ From flutter_secure_storage 11.2.0's README and source:
 - `AndroidOptions()` is the default. Key cipher `RSA/ECB/OAEPWithSHA-256AndMGF1Padding`, storage cipher `AES/GCM/NoPadding`, no biometrics. The README calls it "Standard secure storage with RSA OAEP key wrapping". Version 10 replaced the Jetpack `encryptedSharedPreferences`, which it says "is no longer recommended". Minimum Android SDK 23.
 - Values are stored in SharedPreferences (default name `FlutterSecureStorage`, from `FlutterSecureStorageConfig.java`); the wrapping key is in the Android KeyStore.
 - `resetOnError` defaults to `true`. The source comment: "When an error is detected, automatically reset all data ... it will PERMANENTLY erase the data when an error occurs."
+- `migrateOnAlgorithmChange` defaults to `true` (`android_options.dart`, line 52). On a key mismatch the Android code (`FlutterSecureStorage.handleKeyMismatch`) first tries a migration; if that fails and `resetOnError` is on, it deletes all data and keys.
+- When a call throws and `resetOnError` is on, `FlutterSecureStoragePlugin.java` calls `deleteAll()` and answers the call with the string "Data has been reset" (read from the source). Inference, not tested: a `read` that hits this path returns that string as if it were the stored value. `coldStart` therefore treats any value that is not 64 hex characters as `keyReadFailed`.
 - The README warns: "By default Android backups data on Google Drive. It can cause exception `java.security.InvalidKeyException: Failed to unwrap key`," and tells you to disable auto backup or exclude the plugin's shared preferences. Inferred, not read: the KeyStore key is not part of the backup, so restored preferences cannot be decrypted.
 
-None of this was run on Android. Whether a read after a restore returns null (after the reset) or throws is not known; `SecureKeyStore` handles both by treating them as "no key".
+None of this was run on Android. What a read after a restore returns (null, the "Data has been reset" string, or a thrown `PlatformException`) is not known. `SecureKeyStore` maps a thrown exception to `KeyReadException`; `coldStart` maps a malformed value to `keyReadFailed` and a null to `keyMissing`.
 
 ## Run
 
@@ -77,7 +80,7 @@ cd spikes/crypto
 flutter pub get
 dart run build_runner build          # regenerates lib/database.g.dart (committed)
 flutter analyze
-flutter test                         # 15 tests
+flutter test                         # 17 tests
 
 # host-proxy cold start, compiled child in a fresh process per run
 dart build cli -t bin/cold_start_child.dart
@@ -93,28 +96,32 @@ flutter build apk --debug            # built, not run on a device
 
 ## Host proof results
 
-`flutter test`, 15 of 15 passed (output quoted in the task report). What each proves, with the real SQLite3MultipleCiphers library:
+`flutter test`, 17 of 17 passed (output quoted in the task report). What each proves, with the real SQLite3MultipleCiphers library:
 
 1. The linked SQLite is SQLite3MultipleCiphers (`PRAGMA cipher` returns `chacha20`).
 2. `generateKey` gives 64 hex characters and differs per call.
 3. **Control:** a database opened without a key DOES start with `SQLite format 3\0` and DOES contain the marker string. This shows the byte search below would catch plaintext.
 4. For each key form (passphrase, raw): after writing 200 rows that include the marker `PLAINTEXT_MARKER_Akinyi_Odhiambo_7f3c19`, every file SQLite left (`lineage.db`; no `-journal` or `-wal` remained after close) contains no marker, no row value (`Person 1`), no `CREATE TABLE`, and does not start with the SQLite header.
 5. For each key form: opening the file without a key fails with SQLITE_NOTADB (26).
-6. For each key form: opening with a different random key fails; the error arrives as `DriftRemoteException` wrapping `SqliteException(26): ... file is not a database`, and `isNotADatabase` recognises it.
+6. For each key form: opening with a different random key fails; the error arrives as `DriftRemoteException` wrapping `SqliteException(26): ... file is not a database`, and `isNotADatabase` recognises it (by result code only; there is no message matching). The same file then opens with the correct key and shows its 5 rows, so the failure was the key and not file damage.
 7. An independent SQLite (the `python3` sqlite3 module, version 3.54.0) cannot read the file: `sqlite3.DatabaseError: file is not a database`.
 8. First run creates and stores a key; a returning run reads the same key and sees the rows.
 9. **Simulated app update:** process 1 (the test) does a first run, writes 25 rows and stores the key in a plain file; process 2 (`dart run bin/cold_start_child.dart`, a new OS process) reads the key and reports `state=returning people=25`. This simulates only key persistence across process death. It does not simulate an Android package update, where the question is whether the KeyStore entry and the SharedPreferences survive `adb install -r`.
-10. **Restore without the key:** the database file is copied to a new directory with an empty key store. The copy contains no marker. `coldStart` returns `resyncNeeded` / `keyMissing` with 0 people and a new stored key, without throwing.
-11. Restore onto a store holding a different key: `resyncNeeded` / `keyRejected`, clean database, no exception; the next start is `returning` with the new data.
-12. Key present but database gone: `resyncNeeded` / `databaseMissing`.
+10. **Restore without the key:** the database file is copied to a new directory with an empty key store. The copy contains no marker, and opening it with no key and with a wrong key both fail with code 26. `coldStart` returns `resyncNeeded` / `keyMissing` with 0 people and a new stored key, without throwing. The restored file now sits next to the new one as `lineage.db.<timestamp>.unreadable`, byte for byte identical to the copy, and the original key still opens it (30 rows). The new database is empty.
+11. Restore onto a store holding a different key: `resyncNeeded` / `keyRejected`, clean database, no exception. The stored key is unchanged; the rejected file is set aside byte for byte and still opens with the key that wrote it; the next start is `returning` with the new data.
+12. **Key store read failure** (a fake whose `readKey` throws `KeyReadException`): `keyReadFailed`, no database opened, no key written, the database file byte for byte unchanged, no file added or moved in the directory. The next start with a working store is `returning` with the original 12 rows.
+13. A stored value of `Data has been reset`: `keyReadFailed`, the value left as it is, the database unchanged, nothing set aside.
+14. Key present but database gone: `resyncNeeded` / `databaseMissing`.
 
 Also checked by hand on the Mac app (profile build, real keychain through `SecureKeyStore`):
 
 - The app's `lineage.db` (348,160 bytes, 3,000 people) starts with bytes `4e52 150a 5d6d 4812 ...`, not the SQLite header; `grep -a -c "Person 1"` gives 0; python3's sqlite3 says "file is not a database".
 - The key is in the login keychain (`security find-generic-password -a db_key_v1` shows service `flutter_secure_storage_service`; the secret was not printed).
-- After deleting that keychain item (`security delete-generic-password`), the next launch reported `state=resyncNeeded reason=keyMissing people=0`, and the launch after that `state=returning people=3000`. Done twice, once per build.
+- After deleting that keychain item (`security delete-generic-password`), the next launch reported `state=resyncNeeded reason=keyMissing people=0`, and the launch after that `state=returning people=3000`. Done on both original builds (which deleted the old file) and again on the fixed build: `quarantined=1`, and `shasum` of the set-aside `lineage.db.20261103141631020344.unreadable` equals that of the database before the key was removed (`fffe325c...1341`).
 
 ## Host-proxy cold-start numbers (NOT a weak-phone result)
+
+Measured before the fix round. The returning-start path has changed since only by a 64-hex format check on the stored key.
 
 Machine, as read from tools: Apple M4 (`sysctl machdep.cpu.brand_string`), 10 logical CPUs (`hw.ncpu`), 17,179,869,184 bytes memory (`hw.memsize`), macOS 27.2 build 26B123 (`sw_vers`). Flutter 3.47.9, Dart 3.13.7. Database of 3,000 people, 348,160 bytes. The OS file cache was warm after the first run; it was not cleared. Percentiles are nearest-rank. All times in milliseconds.
 
@@ -133,7 +140,7 @@ Machine, as read from tools: Apple M4 (`sysctl machdep.cpu.brand_string`), 10 lo
 
 The 400.9 ms and 858.4 ms maxima in run 1 are the very first launch of a freshly built executable; the p95 of that set is 16.4 ms inner. The cause was not investigated.
 
-Finding: on this Mac the passphrase form costs about 14 to 15 ms more per open than the raw form, which costs 0.3 to 0.4 ms more than no encryption (median against median). Inferred, not documented on the pages read: the raw form skips the PBKDF2 derivation (64,007 iterations by default). A weak phone's CPU will make that difference larger by an unmeasured factor. Since the key is already 256 random bits, derivation adds nothing to security for this design; switching to `KeyForm.raw` is a one-line change. Decision left to the founder after the phone numbers.
+Finding: on this Mac the passphrase form costs about 14 to 15 ms more per open than the raw form, which costs 0.3 to 0.4 ms more than no encryption (median against median). Inferred, not documented on the pages read: the raw form skips the PBKDF2 derivation (64,007 iterations by default). A weak phone's CPU will make that difference larger by an unmeasured factor. Since the key is already 256 random bits, derivation adds nothing to security for this design. Switching new installs to `KeyForm.raw` is one line of code, but existing installs need a rekey migration (for example open with the passphrase form, then `PRAGMA rekey` to the raw form, or copy into a new raw-keyed file; the exact rekey syntax for the raw form was not checked): without it, every existing database would fail with SQLITE_NOTADB and be set aside as `keyRejected`. Decision left to the founder after the phone numbers.
 
 ### B. The Flutter app (macOS profile build, real keychain), 32 launches with `open -n`
 
@@ -190,7 +197,7 @@ The spike keeps Flutter's default manifest, which does not set `android:allowBac
 4. Before launching the app, capture the restored file: `adb shell run-as spike.crypto.crypto_spike ls -l files/ shared_prefs/` and `adb exec-out run-as spike.crypto.crypto_spike cat files/lineage.db > restored.db`. Check `xxd restored.db | head -1` (must not start `5351 4c69 7465` = "SQLite") and `grep -a -c "Person 1" restored.db` (must be 0).
 5. Launch: `adb logcat -c; adb shell am start -W -n spike.crypto.crypto_spike/.MainActivity; adb logcat -d | grep -E "COLD_START_RESULT|SecureKeyStore"`.
 
-Pass: no crash; the line says `state=resyncNeeded` with `reason=keyMissing` (or `keyRejected`) and `people=0`; the screen shows the re-sync text. Record whether `SecureKeyStore` logged a failure (this tells us whether flutter_secure_storage threw or reset silently). If step 4 shows no `lineage.db`, the backup did not include it; record that, since then the test shows nothing about the fallback.
+Pass: no crash; the line says `state=resyncNeeded` with `reason=keyMissing` (or `keyRejected`) and `people=0`, and `quarantined=1` or more; the screen shows the re-sync text. A first launch that says `state=keyReadFailed` followed by `resyncNeeded` on the next launch also passes (it would mean the plugin reset its store on the first read). Record which happened and whether `SecureKeyStore` logged a failure; this tells us what flutter_secure_storage actually does after a restore. Check `adb shell run-as spike.crypto.crypto_spike ls -l files/` shows the `.unreadable` file. If step 4 shows no `lineage.db`, the backup did not include it; record that, since then the test shows nothing about the fallback.
 
 On Android 12 or later, repeat with the D2D script on the same page (`test_d2d.sh`).
 
@@ -214,6 +221,20 @@ done
 Record per run `process_to_first_frame_ms` (process start to first Flutter frame, from `/proc`), `main_to_first_frame_ms`, `cold_start_ms`, `key_read_ms` and `am start -W`'s `TotalTime`. Report min, median, p95 and max. Also do one run after `adb reboot` (cold file cache). The exact meaning of `TotalTime` and the 100-tick assumption behind `process_to_first_frame_ms` were not checked against a source; if they disagree by more than about 100 ms, note it. Then repeat the 30 runs with `KeyForm.raw` (change the default in `lib/database.dart`, reinstall after uninstalling, since a passphrase database will not open with the raw key) to measure the key-derivation cost on the phone.
 
 Threshold (design): cold start to first frame with the database open under 3 seconds. Proposed reading: p95 of `process_to_first_frame_ms` under 3,000 ms, with the reboot run reported separately.
+
+## When the app deletes or sets aside local data
+
+The review of the first version found five ways the fallback could destroy a database that the stored key might still open. What the spike does now:
+
+| # | Path | Now | Closed or mitigated |
+|---|---|---|---|
+| a | Any `PlatformException` on key read was mapped to "no key", so a transient keychain or KeyStore failure deleted the database and overwrote the key. | `readKey` throws `KeyReadException`; `coldStart` returns `keyReadFailed` and touches nothing (test 12). | Closed in the spike. A failure that never clears leaves the app stuck on "try again"; the real app needs a deliberate, user-confirmed "reset and re-sync" action for that. |
+| b | flutter_secure_storage itself erases its stored data on a decryption error (`resetOnError: true`, default) and may first try a migration (`migrateOnAlgorithmChange: true`, default). After that the app sees no key and starts clean. | The database is set aside, not deleted. A "Data has been reset" answer is treated as `keyReadFailed` (inference from the plugin source, not tested). | Mitigated only. This is plugin behaviour: once the plugin has erased the key, no app code can bring it back, and the set-aside file stays unreadable. The spike keeps the defaults so the phone restore test shows the real behaviour. Recommendation for the real app: pass `resetOnError: false` (the option exists in 11.2.0, `AndroidOptions` constructor, `android_options.dart` line 51), so a decryption error reaches the app as an exception and becomes `keyReadFailed`, and decide on `migrateOnAlgorithmChange` after reading `handleKeyMismatch`. Not tested. |
+| c | Any SQLITE_NOTADB while the correct key is stored gave `keyRejected` and a wipe, for example switching `KeyForm` on existing installs, or an upgrade of the sqlite3 package or SQLite3MultipleCiphers that changes cipher or key-derivation defaults (inference, not tested). | The file is set aside byte for byte and the stored key is kept unchanged (test 11), so the data can be recovered with the right settings. | Mitigated. The user still sees a clean database until someone recovers the file. The real app should pin the cipher settings explicitly, rekey deliberately on any form change, and test upgrades of these packages against an old database. |
+| d | `isNotADatabase` also matched the text "file is not a database", so an unrelated error carrying that text could trigger the fallback. | Removed. Only result code 26 from a `SqliteException` (directly or inside Drift's wrappers) counts. | Closed. |
+| e | `writeKey` called `deleteAll()` after a failed write, which would erase every other secret once the real app stores more than the database key. | It deletes and rewrites only `db_key_v1`. | Closed. |
+
+Paths that still remove or hide data: the plugin's own reset in (b); set-aside files that the real app will one day have to clean up; and, by design, a restore without the key (design section 9).
 
 ## Recommended backup settings for the real app (recommendation, NOT tested)
 
@@ -255,7 +276,7 @@ Two Android pages disagree on the cloud quota: Auto Backup says 25 MB per app; t
 
 ## What was NOT tested
 
-- Anything on Android: cold start, update survival, backup and restore, D2D, the KeyStore, flutter_secure_storage's default ciphers, `resetOnError`, and whether its read throws or returns null after a restore. The debug APK was built (`flutter build apk --debug`, 189,367,254 bytes) but never installed.
+- Anything on Android: cold start, update survival, backup and restore, D2D, the KeyStore, flutter_secure_storage's default ciphers, `resetOnError`, and whether its read throws or returns null after a restore. The debug APK was built (`flutter build apk --debug`, 189,370,714 bytes after the fix round) but never installed.
 - The 3-second threshold. Only host-proxy numbers exist.
 - The Android package update. The host test simulates only key persistence across a new process.
 - Whether `KeyForm.raw` skips key derivation (inferred from timing, not documented on the pages read).
@@ -264,7 +285,8 @@ Two Android pages disagree on the cloud quota: Auto Backup says 25 MB per app; t
 - iOS, web, and the macOS data-protection keychain (the Mac run used the legacy keychain).
 - Memory use, database sizes beyond 3,000 short rows, and a cold OS file cache on the Mac.
 - The SQLite3MultipleCiphers licence.
+- A cleanup policy for set-aside `.unreadable` files, and the user-confirmed "reset and re-sync" action for a key store that never reads again.
 
 ## Build side effects
 
-`flutter build apk --debug` made Gradle install CMake 3.22.1 into `/opt/homebrew/share/android-commandlinetools/cmake/3.22.1` (logged: "Install CMake 3.22.1 v.3.22.1 ... finished"). The NDK 28.2.13676358 was already present.
+`flutter build apk --debug` made Gradle install CMake 3.22.1 into `cmake/3.22.1` under the Android SDK directory (shown by `flutter doctor -v`) (logged: "Install CMake 3.22.1 v.3.22.1 ... finished"). The NDK 28.2.13676358 was already present.

@@ -92,8 +92,8 @@ Future<void> main(List<String> args) async {
       if (r.state != StartState.firstRun) {
         throw StateError('expected firstRun, got ${r.state}');
       }
-      await fill(r.db);
-      await r.db.close();
+      await fill(r.db!);
+      await r.db!.close();
     }
 
     final inner = <int>[], sinceMain = <int>[], outer = <int>[];

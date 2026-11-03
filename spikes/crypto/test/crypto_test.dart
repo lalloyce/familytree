@@ -33,6 +33,84 @@ List<File> filesFor(File db) => db.parent
     .where((f) => f.path.startsWith(db.path))
     .toList();
 
+/// Asserts that [file] cannot be read with [key] (or with no key when [key]
+/// is null): the first read fails with SQLITE_NOTADB (26).
+Future<void> expectNotADatabase(
+  File file,
+  String? key, {
+  KeyForm form = KeyForm.passphrase,
+}) async {
+  if (key == null) {
+    final raw = sql.sqlite3.open(file.path);
+    try {
+      expect(
+        () => raw.select('SELECT count(*) FROM sqlite_master'),
+        throwsA(
+          isA<sql.SqliteException>().having(
+            (e) => e.resultCode,
+            'resultCode',
+            26,
+          ),
+        ),
+      );
+    } finally {
+      raw.close();
+    }
+    return;
+  }
+  final db = openEncryptedDatabase(file, key, form: form);
+  Object? caught;
+  try {
+    await db.customSelect('SELECT count(*) FROM sqlite_master').get();
+  } catch (e) {
+    caught = e;
+  }
+  try {
+    await db.close();
+  } catch (_) {}
+  expect(caught, isNotNull, reason: 'expected the read to fail');
+  expect(isNotADatabase(caught!), isTrue, reason: '$caught');
+}
+
+Future<int> countPeople(File file, String key, {KeyForm? form}) async {
+  final db = openEncryptedDatabase(file, key, form: form ?? KeyForm.passphrase);
+  try {
+    final row = await db
+        .customSelect('SELECT count(*) AS c FROM people')
+        .getSingle();
+    return row.read<int>('c');
+  } finally {
+    await db.close();
+  }
+}
+
+/// KeyStore fake whose read always fails, wrapping a real store so the test
+/// can check that nothing was written.
+class FailingReadKeyStore implements KeyStore {
+  FailingReadKeyStore(this.inner);
+  final MemoryKeyStore inner;
+  var writes = 0;
+
+  @override
+  Future<String?> readKey() async =>
+      throw KeyReadException(StateError('simulated keystore failure'));
+
+  @override
+  Future<void> writeKey(String key) async {
+    writes++;
+    await inner.writeKey(key);
+  }
+
+  @override
+  Future<void> deleteKey() => inner.deleteKey();
+}
+
+List<File> quarantinedIn(Directory d) => d
+    .listSync()
+    .whereType<File>()
+    .where((f) => f.path.contains('.unreadable'))
+    .toList();
+
 Future<void> writeRows(SpikeDb db, {int n = 200}) async {
   await db.batch((b) {
     for (var i = 0; i < n; i++) {
@@ -170,7 +248,8 @@ void main() {
       test(
         'opening with the wrong key fails, and the error is recognised',
         () async {
-          final db = openEncryptedDatabase(dbFile, generateKey(), form: form);
+          final rightKey = generateKey();
+          final db = openEncryptedDatabase(dbFile, rightKey, form: form);
           await writeRows(db, n: 5);
           await db.close();
 
@@ -197,6 +276,10 @@ void main() {
           try {
             await wrong.close();
           } catch (_) {}
+
+          // The failure was the key, not file damage: the right key still
+          // opens the same file and sees the rows.
+          expect(await countPeople(dbFile, rightKey, form: form), 5);
         },
       );
     });
@@ -242,14 +325,14 @@ void main() {
         expect(first.peopleCount, 0);
         final key = await keys.readKey();
         expect(key, matches(RegExp(r'^[0-9a-f]{64}$')));
-        await writeRows(first.db, n: 10);
-        await first.db.close();
+        await writeRows(first.db!, n: 10);
+        await first.db!.close();
 
         final second = await coldStart(keys: keys, dbFile: dbFile);
         expect(second.state, StartState.returning);
         expect(second.peopleCount, 10);
         expect(await keys.readKey(), key);
-        await second.db.close();
+        await second.db!.close();
       },
     );
 
@@ -260,8 +343,8 @@ void main() {
       final keys = PlainFileKeyStoreForTests(keyFile);
       final first = await coldStart(keys: keys, dbFile: dbFile);
       expect(first.state, StartState.firstRun);
-      await writeRows(first.db, n: 25);
-      await first.db.close();
+      await writeRows(first.db!, n: 25);
+      await first.db!.close();
 
       // Process 2: a new OS process with nothing in memory from process 1.
       final r = await Process.run('dart', [
@@ -281,12 +364,13 @@ void main() {
 
     test(
       'restore without the key: file copied to a fresh key store is '
-      'unreadable, app falls back to a clean database and resyncNeeded',
+      'unreadable, app quarantines it, starts clean and reports resyncNeeded',
       () async {
         final phoneA = MemoryKeyStore();
         final a = await coldStart(keys: phoneA, dbFile: dbFile);
-        await writeRows(a.db, n: 30);
-        await a.db.close();
+        await writeRows(a.db!, n: 30);
+        await a.db!.close();
+        final keyA = (await phoneA.readKey())!;
 
         // "Restore": the database file arrives on an install whose key store
         // is empty (Android Keystore keys are not part of a backup).
@@ -295,6 +379,9 @@ void main() {
         dbFile.copySync(restored.path);
         final copiedBytes = restored.readAsBytesSync();
         expect(containsBytes(copiedBytes, utf8.encode(marker)), isFalse);
+        // The restored copy cannot be read with no key or a wrong key.
+        await expectNotADatabase(restored, null);
+        await expectNotADatabase(restored, generateKey());
 
         final phoneB = MemoryKeyStore();
         final b = await coldStart(keys: phoneB, dbFile: restored);
@@ -302,10 +389,18 @@ void main() {
         expect(b.reason, ResyncReason.keyMissing);
         expect(b.peopleCount, 0);
         expect(await phoneB.readKey(), isNotNull);
-        await b.db.close();
+        await b.db!.close();
 
-        // The restored bytes were removed, not kept next to the new database.
-        expect(restored.readAsBytesSync(), isNot(copiedBytes));
+        // The restored file was set aside byte for byte, not deleted.
+        final q = quarantinedIn(restoredDir);
+        expect(b.quarantined.map((f) => f.path), [q.single.path]);
+        expect(q.single.path, contains('lineage.db.'));
+        expect(q.single.path, endsWith('.unreadable'));
+        expect(q.single.readAsBytesSync(), copiedBytes);
+        // And it is still the original data: phone A's key opens it.
+        expect(await countPeople(q.single, keyA), 30);
+        // The new database is empty.
+        expect(await countPeople(restored, (await phoneB.readKey())!), 0);
       },
     );
 
@@ -313,21 +408,73 @@ void main() {
         'database and resyncNeeded, no exception reaches the caller', () async {
       final phoneA = MemoryKeyStore();
       final a = await coldStart(keys: phoneA, dbFile: dbFile);
-      await writeRows(a.db, n: 30);
-      await a.db.close();
+      await writeRows(a.db!, n: 30);
+      await a.db!.close();
 
-      final phoneB = MemoryKeyStore()..writeKey(generateKey());
+      final originalBytes = dbFile.readAsBytesSync();
+      final keyB = generateKey();
+      final phoneB = MemoryKeyStore()..writeKey(keyB);
       final b = await coldStart(keys: phoneB, dbFile: dbFile);
       expect(b.state, StartState.resyncNeeded);
       expect(b.reason, ResyncReason.keyRejected);
       expect(b.peopleCount, 0);
-      await writeRows(b.db, n: 3);
-      await b.db.close();
+      // The stored key was not overwritten.
+      expect(await phoneB.readKey(), keyB);
+      // The rejected file was set aside byte for byte.
+      final q = quarantinedIn(dir);
+      expect(q.single.readAsBytesSync(), originalBytes);
+      await writeRows(b.db!, n: 3);
+      await b.db!.close();
+      // The set-aside file still opens with the key that wrote it.
+      expect(await countPeople(q.single, (await phoneA.readKey())!), 30);
 
       final again = await coldStart(keys: phoneB, dbFile: dbFile);
       expect(again.state, StartState.returning);
       expect(again.peopleCount, 3);
-      await again.db.close();
+      await again.db!.close();
+    });
+
+    test('key store read failure: keyReadFailed, database and key untouched, '
+        'nothing written or moved', () async {
+      final keys = MemoryKeyStore();
+      final a = await coldStart(keys: keys, dbFile: dbFile);
+      await writeRows(a.db!, n: 12);
+      await a.db!.close();
+      final key = (await keys.readKey())!;
+      final bytes = dbFile.readAsBytesSync();
+      final before = dir.listSync().map((e) => e.path).toSet();
+
+      final failing = FailingReadKeyStore(keys);
+      final r = await coldStart(keys: failing, dbFile: dbFile);
+      expect(r.state, StartState.keyReadFailed);
+      expect(r.db, isNull);
+      expect(r.error, isA<KeyReadException>());
+      expect(failing.writes, 0);
+      expect(await keys.readKey(), key);
+      expect(dbFile.readAsBytesSync(), bytes);
+      expect(dir.listSync().map((e) => e.path).toSet(), before);
+
+      // Once the store reads again, the same data opens.
+      final again = await coldStart(keys: keys, dbFile: dbFile);
+      expect(again.state, StartState.returning);
+      expect(again.peopleCount, 12);
+      await again.db!.close();
+    });
+
+    test('a malformed stored value (e.g. "Data has been reset") is treated as '
+        'a read failure, not as a key', () async {
+      final keys = MemoryKeyStore();
+      final a = await coldStart(keys: keys, dbFile: dbFile);
+      await writeRows(a.db!, n: 4);
+      await a.db!.close();
+      final bytes = dbFile.readAsBytesSync();
+      await keys.writeKey('Data has been reset');
+
+      final r = await coldStart(keys: keys, dbFile: dbFile);
+      expect(r.state, StartState.keyReadFailed);
+      expect(await keys.readKey(), 'Data has been reset');
+      expect(dbFile.readAsBytesSync(), bytes);
+      expect(quarantinedIn(dir), isEmpty);
     });
 
     test(
@@ -335,12 +482,12 @@ void main() {
       () async {
         final keys = MemoryKeyStore();
         final a = await coldStart(keys: keys, dbFile: dbFile);
-        await a.db.close();
+        await a.db!.close();
         await deleteDatabaseFiles(dbFile);
         final b = await coldStart(keys: keys, dbFile: dbFile);
         expect(b.state, StartState.resyncNeeded);
         expect(b.reason, ResyncReason.databaseMissing);
-        await b.db.close();
+        await b.db!.close();
       },
     );
   });

@@ -7,9 +7,22 @@
 import 'dart:io';
 import 'dart:math';
 
+/// Thrown by [KeyStore.readKey] when the store could not be read (a platform
+/// failure). This is NOT "no key": the key may still be there, so callers
+/// must not delete data or write a new key in response.
+class KeyReadException implements Exception {
+  KeyReadException(this.cause);
+
+  final Object cause;
+
+  @override
+  String toString() => 'KeyReadException: $cause';
+}
+
 /// Holds the one database key for this install.
 abstract class KeyStore {
-  /// The stored key, or null if none is stored.
+  /// The stored key, or null only when no key is stored.
+  /// Throws [KeyReadException] when the store could not be read.
   Future<String?> readKey();
 
   Future<void> writeKey(String key);
@@ -27,6 +40,9 @@ String generateKey([Random? random]) {
   }
   return sb.toString();
 }
+
+/// True for a key in the form [generateKey] produces.
+bool isWellFormedKey(String key) => RegExp(r'^[0-9a-f]{64}$').hasMatch(key);
 
 /// In-memory fake for host tests. Forgets everything when dropped.
 class MemoryKeyStore implements KeyStore {

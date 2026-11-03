@@ -14,7 +14,7 @@ import 'dart:io';
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 // Experimental library; used only to unwrap errors from the background
-// isolate. The message check in isNotADatabase is the fallback.
+// isolate.
 // ignore: experimental_member_use
 import 'package:drift/remote.dart' show DriftRemoteException;
 import 'package:sqlite3/sqlite3.dart' as sql;
@@ -115,5 +115,7 @@ bool isNotADatabase(Object error) {
     }
     break;
   }
-  return error.toString().contains('file is not a database');
+  // No message matching: an error we cannot classify by code is not treated
+  // as "unreadable", so it never triggers the fallback.
+  return false;
 }
