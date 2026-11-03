@@ -1,6 +1,6 @@
 # Family Lineage App: Design
 
-Status: draft for the founder's approval. Not approved. Nothing has been built.
+Status: approved by the founder on 2026-11-03 (chat reply "Approve design").
 Date: 2026-11-03 (the founder's answers to the open decisions are included)
 
 How to read this document: **Founder decided** marks what the founder said. **My call** marks choices I made that the founder has not agreed to. Section 12 lists what is still open, section 13 lists my calls to check, and section 14 lists what was verified against a source and what was not.
@@ -131,8 +131,9 @@ Stack: Postgres on the server (Supabase is a candidate), SQLite on the phone via
 
 **Tables (sketch)**
 ```
-person(id, is_placeholder, name_key, created_by, deleted_at)
-house(id, husband_id, created_by, deleted_at)
+person(id, is_placeholder, name_key, sex, created_by, deleted_at)
+person_name(id, person_id, name, kind)     -- spelling variants and extra names
+house(id, husband_id, ordinal, created_by, deleted_at)
 claim(id, kind, subject_id, object_id, body, asserted_by, basis,
       base_claim_id, status, scope, created_at)
 claim_audience(claim_id, account_id)       -- snapshot of who may see it, taken when shared
@@ -251,6 +252,15 @@ The UX Architect and the engineering reports produced these. They are reasoning,
 - Android-only pilot, with the typed code as the primary invite path.
 - Search-before-create, the checksum on typed invite codes and the spike thresholds.
 - The file location of this document.
+
+**Decisions made while planning Milestone 1.** These fill gaps in the design. The founder can accept or change any of them.
+- **A. `person.sex` is nullable.** The reason: "son of" versus "daughter of" needs it, and an unknown sex reads "child of". The table sketch in section 8 had no such field.
+- **B. `house.ordinal` is nullable.** The reason: a house can exist with a known number and an unknown wife, as in "houses 1 and 3 are unknown".
+- **C. A wife's membership is a `wifeOfHouse` claim, displayed "married".** `belongsToHouse` carries only the basis `bornTo` or `joined`. The reason: this keeps "child of one house" single-valued and "wife of several houses" multi-valued.
+- **D. One person replacing another person's claim never supersedes it.** Both stay active and show "Accounts differ". An asserter replacing their own active claim, where `baseClaimId` equals that claim's id, supersedes it, even when other accounts' claims on the same contest key are active. The other accounts' claims stay active. The reason: this follows the anti-goal that persistence must not win by volume.
+- **E. When a person's parentage is disputed or cyclic, the chain stops at that person with "accounts differ".**
+- **F. In M1 a `joined` basis displays as the neutral "belongs to".** Showing the word "joined" waits for the audience rules in M4. This settles the "known tension" in section 8 for M1 only.
+- **G. `person_name(person_id, name, kind)` holds spelling variants and extra names** (edge case 12). `person.name_key` is the primary display name.
 
 ## 14. Verification status
 

@@ -21,7 +21,7 @@ flutter test
 ```
 
 - The Dart package is `related`; the Android application ID is `ke.related.app` (from `flutter create --org ke.related ... app`).
-- `app/lib/data/app_database.g.dart` is generated and committed, so a fresh checkout compiles without running codegen. Regenerate it after any change to a Drift table.
+- `app/lib/data/database.g.dart` is generated and committed, so a fresh checkout compiles without running codegen. Regenerate it after any change to a Drift table.
 - `flutter config --android-sdk` was not needed: Flutter finds the SDK through `ANDROID_HOME`.
 - Weakest test phone: not yet named. Needed for every awaiting-phone measurement (see Next and [spike-results.md](spike-results.md)).
 
@@ -86,4 +86,4 @@ Awaiting the founder:
 2. Task 1: paper test with relatives. The founder runs it. The script is `docs/paper-test.md`. No interviews are recorded yet.
 3. Name the weakest test phone and record its model, RAM and Android version above. It unlocks the spike 3 on-device matrix, the spike 4 layout and frame timing, and the spike 5 cold start, update survival and backup and restore. Procedures are in each spike's README.
 
-Later: tasks add the Drift tables (Task 7). `AppDatabase` in `app/lib/data/app_database.dart` has an empty schema for now.
+Later: tasks add the claims, household and tree logic on top of the Drift schema in `app/lib/data/tables.dart` and `app/lib/data/database.dart` (Task 7, done).
