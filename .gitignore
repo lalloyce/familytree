@@ -1,0 +1,32 @@
+# Agent working files, never committed
+.superpowers/
+
+# macOS
+.DS_Store
+
+# Flutter and Dart build output
+.dart_tool/
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+**/build/
+coverage/
+*.iml
+.idea/
+
+# Android local config and keys
+**/android/.gradle/
+**/android/local.properties
+**/android/key.properties
+*.jks
+*.keystore
+
+# iOS and web local output
+**/ios/Pods/
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/flutter_export_environment.sh
+
+# Spike 1 private Postgres cluster
+spikes/leak/.pgdata/

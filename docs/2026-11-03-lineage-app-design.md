@@ -1,6 +1,6 @@
 # Family Lineage App: Design
 
-Status: draft for the founder's approval. Not approved. Nothing has been built.
+Status: approved by the founder on 2026-11-03 (chat reply "Approve design"), in the text committed as cc1f888. Later edits were not shown to the founder: 87537ba added spike findings to sections 9 and 14; 9ca0afc wrote this status line, changed the section 8 table sketch (`person.sex`, `person_name`, `house.ordinal`) and added decisions A to G to section 13; a37833f added the `app_settings` sketch line and decision H; the final M1 review fix reworded decision D, the section 13 title and the table name.
 Date: 2026-11-03 (the founder's answers to the open decisions are included)
 
 How to read this document: **Founder decided** marks what the founder said. **My call** marks choices I made that the founder has not agreed to. Section 12 lists what is still open, section 13 lists my calls to check, and section 14 lists what was verified against a source and what was not.
@@ -131,8 +131,9 @@ Stack: Postgres on the server (Supabase is a candidate), SQLite on the phone via
 
 **Tables (sketch)**
 ```
-person(id, is_placeholder, name_key, created_by, deleted_at)
-house(id, husband_id, created_by, deleted_at)
+person(id, is_placeholder, name_key, sex, created_by, deleted_at)
+person_name(id, person_id, name, kind)     -- spelling variants and extra names
+house(id, husband_id, ordinal, created_by, deleted_at)
 claim(id, kind, subject_id, object_id, body, asserted_by, basis,
       base_claim_id, status, scope, created_at)
 claim_audience(claim_id, account_id)       -- snapshot of who may see it, taken when shared
@@ -142,6 +143,7 @@ person_alias(alias_id, canonical_id)       -- merges
 merge_event(id, a, b, evidence, confirmed_by_a, confirmed_by_b, reverses_event_id)
 dispute_response(id, subject_id, kind, respondent_id, chosen_claim_id, created_at)
 privacy_setting(person_id, hide_quiet_details)
+app_settings(key, value)                   -- local only, never synced; M1 keeps "who is me" here
 operator_access_log(id, operator, table_name, at)
 ```
 - IDs are client-generated UUIDs. A name is never an identity.
@@ -168,14 +170,14 @@ operator_access_log(id, operator, table_name, at)
 
 - Modules: data (Drift), claims, sync, invite, auth, crypto, tree. The client holds no visibility logic. It displays what the server sent. Hiding on the client would mean the data is already on the phone.
 - The phone may hold the viewer's server-built view, their own unsent claims, and a pool of pre-fetched invite tokens. It never holds quiet links the viewer is not entitled to.
-- **Sync approach (my call): a small custom sync behind an interface**, with PowerSync swappable in. Reason: claims are append-only, so writes are plain inserts, and the visibility filter must live on the server either way. Cost: we write retries, idempotency, resumable pulls and revocation. The founder and Claude maintain it, so the sync code, its tests and its notes must be clear enough for a session that remembers nothing. What would change this: spike 2 shows the custom sync costs more than a few weeks, or PowerSync passes the leak spike.
-- **Offline invite.** The inviter's phone pre-fetches single-use tokens. Offline, it binds the claim locally and shares a short code with a checksum. The link carries only the token, never the relationship. The invitee can type the code offline, and the app shows only "saved, we will connect when you have signal". Redemption happens when signal returns.
-- **Redeeming an invite (my call).** Holding a code is not enough. A redeemer sees nothing of the tree until the inviter or the named relative confirms.
+- **Sync approach (my call): a small custom sync behind an interface**, with PowerSync swappable in. Reason: claims are append-only, so writes are plain inserts, and the visibility filter must live on the server either way. Cost: we write retries, idempotency, resumable pulls and revocation. The founder and Claude maintain it, so the sync code, its tests and its notes must be clear enough for a session that remembers nothing. What would change this: spike 2 shows the custom sync costs more than a few weeks, or PowerSync passes the leak spike. Spike result (2026-11-03, host run, see [spike-results.md](spike-results.md)): the custom sync passed the spike's four assertions on 200 fuzzed seeds against an in-memory fake server. The production estimate is 4 to 7 working weeks in all, 12 to 23 days of it only because the sync is custom [ESTIMATE, not measured]. Neither trigger is shown: this document does not say how many weeks "a few" is, and PowerSync was not run through the leak spike. The choice stays open as a proposal in spike-results.md.
+- **Offline invite.** The inviter's phone pre-fetches single-use tokens. Offline, it binds the claim locally and shares a short code with a checksum. The link carries only the token, never the relationship. The invitee can type the code offline, and the app shows only "saved, we will connect when you have signal". Redemption happens when signal returns. Spike 3 (simulated in Dart, not run on a phone; see [spike-results.md](spike-results.md)): the code is 8 token symbols plus 1 check symbol from a 31-symbol alphabet. 31^8 is about 39.6 bits, so a 40-bit token cannot map one-to-one onto 8 symbols, and the server must issue 8-symbol values directly. The token pool and the outbox must be persisted atomically.
+- **Redeeming an invite (my call).** Holding a code is not enough. A redeemer sees nothing of the tree until the inviter or the named relative confirms. Open (spike 3): flow 4 shows the redeemer the inviter and the claim before confirmation, and the claim text can name a person in the tree. This sentence and flow 4 disagree until the founder chooses; see [spike-results.md](spike-results.md).
 - **Sign-in and recovery.** Email and password (founder decision). The email address is the unique identifier and must be verified before the account can see any tree, so a typo or a borrowed address cannot attach one person's account to another's place in the tree. Password reset goes through the verified email. Add rate limiting on sign-in and reset, and a minimum password length. First sign-in needs signal; after that the app works offline on the stored session. Recovery means signing in again and re-syncing from the server. Unsynced work on a lost phone is lost, and the app says so at install.
 - **Why this matters for quiet links (my call).** An account holds access to quiet links, so taking over an account exposes them. Email plus password is weaker than a phone code against password reuse and a shared email inbox. The MVP accepts this, with two mitigations: sign-out of other devices on password change, and a notification email on every reset. Two-step sign-in and passkeys are later.
 - **Shared inboxes (my call).** Relatives who share one email address cannot both have accounts. The sign-up screen says so plainly and does not offer a workaround. Whether this blocks real users in the village is a question for the paper test.
-- **Encryption.** The local database is encrypted from the first install, with a random key held in the platform's secure storage. This protects a lost or stolen phone, not an unlocked one. Quiet-link secrecy comes from not sending the data.
-- **Backups.** A restored database without its key is unreadable, so a restore means a re-sync, and unsynced items are lost. Warn users.
+- **Encryption.** The local database is encrypted from the first install, with a random key held in the platform's secure storage. This protects a lost or stolen phone, not an unlocked one. Quiet-link secrecy comes from not sending the data. Spike 5 (host run on a Mac only, no phone; see [spike-results.md](spike-results.md)): SQLite3MultipleCiphers through the `sqlite3` build hook works with Drift's `NativeDatabase`, and the file held no plaintext. A missing or rejected key sets the old file aside and does not delete it. Spike 1 found that SQLite's default leaves the bytes of revoked rows in the device file and that `PRAGMA secure_delete = ON` removed them in the test (rollback journal mode; WAL not tested), so the device database should set it.
+- **Backups.** A restored database without its key is unreadable, so a restore means a re-sync, and unsynced items are lost. Warn users. Spike 5 simulated this on a Mac: a database file restored without its key could not be opened, and the app fell back to a clean database and kept the old file. Android backup and restore were not run, and the backup settings recommended in `spikes/crypto/README.md` are untested.
 
 ## 10. Build order
 
@@ -237,7 +239,7 @@ The UX Architect and the engineering reports produced these. They are reasoning,
 - Who inherits an account when its owner dies.
 - Date and budget.
 
-## 13. My calls (not agreed by the founder)
+## 13. My calls, awaiting the founder's confirmation
 
 - The belongs-to-house change (section 4).
 - Quiet-link behaviour and its defaults (section 4).
@@ -251,6 +253,16 @@ The UX Architect and the engineering reports produced these. They are reasoning,
 - Android-only pilot, with the typed code as the primary invite path.
 - Search-before-create, the checksum on typed invite codes and the spike thresholds.
 - The file location of this document.
+
+**Decisions made while planning Milestone 1.** These fill gaps in the design. The founder can accept or change any of them.
+- **A. `person.sex` is nullable.** The reason: "son of" versus "daughter of" needs it, and an unknown sex reads "child of". The table sketch in section 8 had no such field.
+- **B. `house.ordinal` is nullable.** The reason: a house can exist with a known number and an unknown wife, as in "houses 1 and 3 are unknown".
+- **C. A wife's membership is a `wifeOfHouse` claim, displayed "married".** `belongsToHouse` carries only the basis `bornTo` or `joined`. The reason: this keeps "child of one house" single-valued and "wife of several houses" multi-valued.
+- **D. A claim replaces only its own account's active claim.** One account replacing another account's claim never supersedes it: both stay active and show "Accounts differ". `baseClaimId` supersedes the claim it names only when that claim is active, is of the same kind, was asserted by the same account, and has the same contest key or the same subject. Any other base (another account's claim, an inactive one, one of another kind, or one with a different subject and a different contest key) is stale: nothing is superseded and the new claim stands beside the existing ones. The same-subject rule lets one account move a wife from one house to another, although a wife claim contests by house. Other accounts' claims on the contest key stay active. "Competing" means that the active claims on one contest key hold more than one distinct content (subject, object, basis, body); accounts that agree on all four are not a dispute and show no "Accounts differ". The reason: this follows the anti-goal that persistence must not win by volume.
+- **E. When a person's parentage is disputed or cyclic, the chain stops at that person with "accounts differ".**
+- **F. In M1 a `joined` basis displays as the neutral "belongs to".** Showing the word "joined" waits for the audience rules in M4. This settles the "known tension" in section 8 for M1 only.
+- **G. `person_name(person_id, name, kind)` holds spelling variants and extra names** (edge case 12). `person.name_key` is the primary display name.
+- **H. In M1 the person who is "me" is kept in a local, never-synced `app_settings` row; from M2 it comes from the link between the account and its person.**
 
 ## 14. Verification status
 
@@ -268,13 +280,30 @@ The UX Architect and the engineering reports produced these. They are reasoning,
 - Android checks App Links against the website at install, and changes can take up to seven days to propagate on Android 15 and later: [Android](https://developer.android.com/training/app-links/verify-android-applinks).
 - WCAG 4.5:1 for normal text and 3:1 for large text: [WCAG](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html).
 
+**Verified by a run on the host machine, not on a phone (2026-11-03).** Details and limits are in [spike-results.md](spike-results.md).
+- Spike 1, against a local PostgreSQL 16.15 model (not Supabase): through the app endpoints, viewer B's pull payloads, wire bytes, device tables and row counts were identical between a world with a quiet claim and a world without, and each of three leaky canaries was caught. A raw SQL role could still read row counts from `pg_stat_user_tables`.
+- Spike 1: revoked rows left no bytes in the device file only with `PRAGMA secure_delete = ON`.
+- Spike 2, against an in-memory fake server: on 200 seeds of 1,000 operations from three devices, no lost writes, competing accounts kept, and a direct merge then undo returned the identical view. The stricter replay differs on 2,884 of 12,822 undone pairs (spike-results.md, Finding 8).
+- Spike 3, in a Dart simulation: matrix rows 1, 2, 4 and 5 and the checksum. Row 3 and every on-device cell are not run.
+- Spike 5, on a Mac: the SQLite3MultipleCiphers setup with Drift (without PowerSync) produced a file with no plaintext, restore without the key fell back without throwing, and a failed key read changed nothing.
+
 **Not verified**
 - That a typical relative in the pilot has an email address they can open on their phone. The sign-in method was chosen by the founder for simplicity, not tested against the device and account mix. Phone sign-in is no longer in the MVP, so the Kenya check on it is dropped.
 - That Supabase's email sign-in (verification, reset, rate limits) meets the requirements in section 9, and what it costs at pilot size.
 - That PowerSync works with a Drift-managed database, its cost, and its limits on how many sync groups a user can have.
 - Whether the 48dp touch target is Android's recommendation (the page I fetched did not say).
-- The Android default secure-storage key, the `SQLite3MultipleCiphers` setup with Drift and PowerSync, and the backup behaviour reported by the Mobile App Builder.
+- The Android default secure-storage key (read from documentation in spike 5, not run), the `SQLite3MultipleCiphers` setup with PowerSync (not attempted; the setup with Drift alone was run on a Mac, see above), and the backup behaviour reported by the Mobile App Builder (not run on Android).
 - Postgres version support for the CYCLE clause on the hosted database we would use.
-- Query speed at a few thousand people, tree smoothness on weak phones, and the device mix.
+- Query speed at a few thousand people, tree smoothness on weak phones, and the device mix. Spike 4 produced host proxy numbers on a Mac only; no phone has been measured.
 - Everything the UX Architect said about law and data protection in Kenya. It is marked [NEEDS SOURCE] throughout and none of it is stated here as fact.
 - The reported last-write-wins behaviour of Firestore, and the state of the `sql_crdt` and Couchbase Flutter packages.
+
+**Not verified, raised by the spikes** (see [spike-results.md](spike-results.md))
+- Cold start with the encrypted database on a phone, whether the key survives an Android app update, and what Android backup and restore do to the database and the key. What flutter_secure_storage returns after a restore, and the effect of its `resetOnError` default of `true`.
+- The offline invite on a phone (all five matrix rows), and handling of an install referrer. Row 3 needs link handling built first.
+- Whether Supabase's exposed schemas hide catalog statistics and system columns from viewers. A raw SQL role read row counts in spike 1 [NEEDS SOURCE for PostgREST exposure].
+- Timing differences, concurrent writes racing a revocation, and leftover bytes in WAL mode (not tested in spike 1).
+- That an unbound client id gives an existence oracle. Spike 1 reasons it but built no canary for it. The id-derivation rule is a proposal, not approved.
+- The production sync estimate of 4 to 7 weeks [ESTIMATE, not measured], whether PowerSync would remove the custom-sync-only work, and the custom sync against real Postgres under concurrent transactions.
+- How refused merges behave after an undo (spike 2, Finding 3b). This needs a design decision before M5.
+- That the spike 4 generator's reading of "20 women who appear in two houses" is what the founder meant.
