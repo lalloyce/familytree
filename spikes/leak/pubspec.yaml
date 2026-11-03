@@ -1,0 +1,15 @@
+name: leak_spike
+description: Spike 1, leak and revocation. Throwaway.
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  crypto: any
+  drift: any
+  postgres: any
+  sqlite3: any
+
+dev_dependencies:
+  test: any

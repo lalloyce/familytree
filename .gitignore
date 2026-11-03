@@ -27,3 +27,6 @@ coverage/
 **/ios/Pods/
 **/ios/Flutter/Generated.xcconfig
 **/ios/Flutter/flutter_export_environment.sh
+
+# Spike 1 private Postgres cluster
+spikes/leak/.pgdata/
