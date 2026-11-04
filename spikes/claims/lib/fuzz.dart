@@ -1,0 +1,664 @@
+/// The seeded fuzz for spike 2: three devices, random offline periods,
+/// random reconnect order, duplicate pushes, mid-push drops and one poison
+/// row. Everything is drawn from one Random(seed), so a seed replays.
+library;
+
+import 'dart:math';
+
+import 'device.dart';
+import 'fake_network.dart';
+import 'fake_server.dart';
+import 'model.dart';
+
+const a1 = 'A1 zero lost writes';
+const a2 = 'A2 contested facts kept as competing accounts, never overwritten';
+const a3 = 'A3 merge then undo returns the pre-merge view';
+const a4 = 'A4 a failing push does not block later pushes';
+const assertionNames = [a1, a2, a3, a4];
+
+class FuzzConfig {
+  const FuzzConfig({
+    required this.seed,
+    this.ops = 1000,
+    this.mode = ServerMode.correct,
+    this.blockingQueue = false,
+  });
+  final int seed;
+  final int ops;
+  final ServerMode mode;
+  final bool blockingQueue;
+
+  String get replay =>
+      'dart run bin/fuzz.dart --seed $seed --ops $ops --mode ${mode.name}'
+      '${blockingQueue ? ' --blocking' : ''}';
+}
+
+class FuzzResult {
+  FuzzResult(this.config);
+  final FuzzConfig config;
+  final Map<String, List<String>> failures = {
+    for (final a in assertionNames) a: [],
+  };
+  final Map<String, Object> stats = {};
+
+  bool get passed => failures.values.every((f) => f.isEmpty);
+  bool failed(String assertion) => failures[assertion]!.isNotEmpty;
+
+  String summary() {
+    final b = StringBuffer(
+      'seed ${config.seed} mode=${config.mode.name}'
+      '${config.blockingQueue ? ' blockingQueue' : ''}: '
+      '${passed ? 'PASS' : 'FAIL'}\n',
+    );
+    for (final a in assertionNames) {
+      final f = failures[a]!;
+      b.writeln(
+        '  ${f.isEmpty ? 'pass' : 'FAIL'}  $a'
+        '${f.isEmpty ? '' : ' (${f.length} violations; first: ${f.first})'}',
+      );
+    }
+    b.write('  stats: $stats');
+    if (!passed) b.write('\n  REPLAY: ${config.replay}');
+    return b.toString();
+  }
+}
+
+Future<FuzzResult> runFuzz(FuzzConfig cfg) async {
+  final watch = Stopwatch()..start();
+  final res = FuzzResult(cfg);
+  final rng = Random(cfg.seed);
+  final server = FakeServer(mode: cfg.mode);
+
+  String uuid() {
+    final b = List<int>.generate(16, (_) => rng.nextInt(256));
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    final h = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+    return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}'
+        '-${h.substring(16, 20)}-${h.substring(20)}';
+  }
+
+  // Device clocks disagree on purpose; d2's runs backwards. Display only.
+  var tick = 0;
+  final clocks = <int Function()>[
+    () => 1700000000 + (tick++),
+    () => 1700000000 + 259200 + (tick++),
+    () => 1700000000 - (tick++),
+  ];
+  // d0 and d2 are two phones of the same person (account A); d1 is B.
+  const accounts = ['acct-A', 'acct-B', 'acct-A'];
+  final nets = [for (var i = 0; i < 3; i++) FakeNetwork(server, rng)];
+  final devices = [
+    for (var i = 0; i < 3; i++)
+      Device(
+        id: 'd$i',
+        accountId: accounts[i],
+        transport: nets[i],
+        newId: uuid,
+        clock: clocks[i],
+        blockingQueue: cfg.blockingQueue,
+      ),
+  ];
+  final houses = [for (var i = 0; i < 12; i++) 'house-$i'];
+  final authored = <String, ClaimRow>{};
+  final d0Order = <String>[]; // ids written on d0, in order
+  T pick<T>(List<T> xs) => xs[rng.nextInt(xs.length)];
+  String aName() =>
+      pick(['Deko', 'Rafa', 'Kito', 'Tembo', 'Pima', 'Lumo', 'Nuru']) +
+      pick(['', ' Jr', 'h', 'o']);
+
+  Future<ClaimRow> write(Device d, ClaimRow r) async {
+    authored[r.id] = r;
+    if (d.id == 'd0') d0Order.add(r.id);
+    return d.write(r);
+  }
+
+  final hist = <String, int>{};
+  void count(String k) => hist[k] = (hist[k] ?? 0) + 1;
+  String? poisonId;
+  var d0Claims = 0;
+
+  // Start: d0 records ten people; everyone syncs cleanly.
+  for (var i = 0; i < 10; i++) {
+    final id = uuid();
+    await write(
+      devices[0],
+      devices[0].draft(RowKind.person, id, rowId: id, body: aName()),
+    );
+  }
+  for (final n in nets) {
+    n
+      ..online = true
+      ..faults = FaultRates.none;
+  }
+  for (final d in [...devices, ...devices]) {
+    await d.sync();
+  }
+  for (final n in nets) {
+    n
+      ..online = rng.nextBool()
+      ..faults = const FaultRates();
+  }
+
+  Future<void> assertClaim(Device d, List<String> persons) async {
+    var kind = rng.nextDouble() < 0.6
+        ? RowKind.belongsToHouse
+        : RowKind.wifeOfHouse;
+    var subject = pick(persons);
+    var house = pick(houses);
+    // Half the time the user revisits one of the eight most recent facts on
+    // their phone (to correct or dispute it). Recent facts are what both of
+    // account A's phones hold, so the same key is edited offline from two
+    // devices and stale bases occur.
+    final known = await d.recentStandingClaims(8);
+    if (known.isNotEmpty && rng.nextBool()) {
+      final k = pick(known);
+      kind = k.kind;
+      if (kind == RowKind.belongsToHouse) {
+        subject = k.subjectId;
+      } else {
+        house = k.objectId!;
+      }
+    }
+    final standing = await d.standingClaims(
+      kind,
+      kind == RowKind.belongsToHouse ? subject : house,
+    );
+    final own = standing.where((r) => r.assertedBy == d.accountId).toList();
+    final others = standing.where((r) => r.assertedBy != d.accountId).toList();
+    final x = rng.nextDouble();
+    final base = own.isNotEmpty && x < 0.5
+        ? own
+              .last
+              .id // replacing my own current claim
+        : others.isNotEmpty && x < 0.75
+        ? pick(others)
+              .id // replacing someone else's claim (decision D)
+        : null;
+    final row = d.draft(
+      kind,
+      subject,
+      objectId: house,
+      basis: kind == RowKind.belongsToHouse
+          ? pick(['bornTo', 'joined'])
+          : 'married',
+      baseClaimId: base,
+    );
+    if (d.id == 'd0' && ++d0Claims == 5) {
+      poisonId = row.id;
+      server.poisonIds.add(row.id);
+    }
+    await write(d, row);
+  }
+
+  Future<void> operate(Device d) async {
+    final persons = await d.canonicalPersons();
+    final c = rng.nextDouble();
+    if (persons.length < 2 || c < 0.15) {
+      count('addPerson');
+      final id = uuid();
+      await write(d, d.draft(RowKind.person, id, rowId: id, body: aName()));
+    } else if (c < 0.80) {
+      if (c < 0.60) {
+        count('assertClaim');
+        await assertClaim(d, persons);
+      } else {
+        count('editName');
+        await write(d, d.draft(RowKind.nameEdit, pick(persons), body: aName()));
+      }
+    } else if (c < 0.90) {
+      count('merge');
+      final a = pick(persons);
+      final b = pick(persons.where((p) => p != a).toList());
+      await write(d, d.draft(RowKind.merge, a, objectId: b));
+    } else {
+      final merges = await d.undoableMerges();
+      if (merges.isEmpty) {
+        count('undo (none visible, asserted a claim instead)');
+        await assertClaim(d, persons);
+      } else {
+        count('undoMerge');
+        await write(d, d.draft(RowKind.unmerge, pick(merges).id));
+      }
+    }
+  }
+
+  var opsDone = 0, syncs = 0, toggles = 0;
+  while (opsDone < cfg.ops) {
+    final r = rng.nextDouble();
+    if (r < 0.06) {
+      toggles++;
+      final n = pick(nets);
+      n.online = !n.online;
+    } else if (r < 0.26) {
+      final online = [
+        for (var i = 0; i < 3; i++)
+          if (nets[i].online) i,
+      ];
+      if (online.isNotEmpty) {
+        syncs++;
+        await devices[pick(online)].sync();
+      }
+    } else {
+      opsDone++;
+      await operate(pick(devices));
+    }
+  }
+
+  final outboxes = <String, List<String>>{};
+  Future<bool> outboxesHoldOnly(bool Function(String id) allowed) async {
+    for (final d in devices) {
+      outboxes[d.id] = await d.outboxIds();
+    }
+    return outboxes.values.every((o) => o.every(allowed));
+  }
+
+  /// Everyone online with no injected faults; sync rounds in random order
+  /// until [done], then one pull each so every device sees the last pushes.
+  Future<void> drain(Future<bool> Function() done) async {
+    for (final n in nets) {
+      n
+        ..online = true
+        ..faults = FaultRates.none;
+    }
+    for (var round = 0; round < 40; round++) {
+      for (final d in [...devices]..shuffle(rng)) {
+        await d.sync();
+      }
+      if (await done()) break;
+    }
+    for (final d in devices) {
+      await d.pull();
+    }
+  }
+
+  // Phase 1: the poison row still fails.
+  await drain(() => outboxesHoldOnly((id) => id == poisonId));
+  await outboxesHoldOnly((_) => true);
+
+  // A4: the stuck row is the only row left; everything after it got through.
+  final a4f = res.failures[a4]!;
+  if (poisonId == null) {
+    a4f.add('no poison row was created');
+  } else {
+    if (server[poisonId!] != null) a4f.add('poison row reached the server');
+    final rest = outboxes['d0']!.where((id) => id != poisonId).toList();
+    if (rest.isNotEmpty) {
+      a4f.add('${rest.length} d0 rows still queued behind the poison row');
+    }
+    final after = d0Order.sublist(d0Order.indexOf(poisonId!) + 1);
+    final missing = after.where((id) => server[id] == null).length;
+    if (missing > 0) {
+      a4f.add('$missing of ${after.length} later d0 rows not on the server');
+    }
+    res.stats['d0RowsAfterPoison'] = after.length;
+  }
+
+  // Phase 2: the server is fixed; everything drains.
+  server.poisonActive = false;
+  await drain(() => outboxesHoldOnly((_) => false));
+
+  // Epilogue for A3: merge then undo with nothing in between, across devices.
+  Future<void> syncAll() async {
+    for (var i = 0; i < 2; i++) {
+      for (final d in devices) {
+        await d.sync();
+      }
+    }
+  }
+
+  final a3f = res.failures[a3]!;
+  Future<ClaimRow?> mergeOn(Device d) async {
+    final targets = await d.mergeTargets();
+    final ps = await d.canonicalPersons();
+    final bs = ps.where((p) => !targets.contains(p)).toList();
+    if (bs.length < 2) return null;
+    final b = pick(bs);
+    final a = pick(ps.where((p) => p != b).toList());
+    return write(d, d.draft(RowKind.merge, a, objectId: b));
+  }
+
+  Future<void> undoOn(Device d, ClaimRow m) async {
+    final ms = await d.undoableMerges();
+    if (!ms.any((x) => x.id == m.id)) {
+      a3f.add('epilogue: ${d.id} cannot see merge ${m.id} as undoable');
+      return;
+    }
+    await write(d, d.draft(RowKind.unmerge, m.id));
+  }
+
+  Future<List<String>> views() async => [
+    renderView(server.rows),
+    for (final d in devices) renderView(await d.allRows()),
+  ];
+
+  final before = await views();
+  final m1 = await mergeOn(devices[1]);
+  if (m1 == null) {
+    a3f.add('epilogue: no two persons to merge');
+  } else {
+    await syncAll();
+    if (server[m1.id]?.status != Status.effective) {
+      a3f.add('epilogue merge was not effective');
+    }
+    final during = await views();
+    if (during[0] == before[0]) a3f.add('epilogue merge changed nothing');
+    await undoOn(devices[2], m1);
+    await syncAll();
+    final after = await views();
+    for (var i = 0; i < after.length; i++) {
+      if (after[i] != before[0]) {
+        a3f.add(
+          'epilogue: ${i == 0 ? 'server' : 'd${i - 1}'} view after undo '
+          'differs from before merge: ${firstDiff(before[0], after[i])}',
+        );
+      }
+    }
+  }
+
+  // Epilogue 2: claims and a name edit made while merged stay where they
+  // were made; the result must equal the log with the merge pair removed.
+  final m2 = await mergeOn(devices[0]);
+  if (m2 != null) {
+    await syncAll();
+    final kept = m2.subjectId;
+    await write(
+      devices[1],
+      devices[1].draft(
+        RowKind.belongsToHouse,
+        kept,
+        objectId: pick(houses),
+        basis: 'bornTo',
+      ),
+    );
+    await write(
+      devices[2],
+      devices[2].draft(RowKind.nameEdit, kept, body: aName()),
+    );
+    await syncAll();
+    await undoOn(devices[0], m2);
+    await syncAll();
+  }
+
+  // ------------------------------------------------------------ A1
+  final a1f = res.failures[a1]!;
+  for (final r in authored.values) {
+    if (server[r.id] == null) {
+      a1f.add('lost ${r.kind.name} ${r.id} from ${r.deviceId}');
+    }
+  }
+  final serverState = {
+    for (final r in server.rows) r.id: '${r.content}|${r.status}|${r.seq}',
+  };
+  for (final d in devices) {
+    final ob = await d.outboxIds();
+    if (ob.isNotEmpty) a1f.add('${d.id} outbox still holds ${ob.length}');
+    final mine = {
+      for (final r in await d.allRows())
+        r.id: '${r.content}|${r.status}|${r.seq}',
+    };
+    for (final e in serverState.entries) {
+      if (mine[e.key] == null) {
+        a1f.add('${d.id} is missing ${e.key}');
+      } else if (mine[e.key] != e.value) {
+        a1f.add('${d.id} differs on ${e.key}');
+      }
+    }
+    for (final id in mine.keys) {
+      if (!serverState.containsKey(id)) a1f.add('${d.id} has unsynced $id');
+    }
+  }
+
+  // ------------------------------------------------------------ A2
+  final a2f = res.failures[a2]!;
+  for (final r in authored.values) {
+    final s = server[r.id];
+    if (s != null && s.content != r.content) {
+      a2f.add('server rewrote ${r.kind.name} ${r.id}');
+    }
+  }
+  for (final d in devices) {
+    a2f.addAll(d.contentMismatches);
+  }
+  final claims = server.rows.where((r) => r.isClaim).toList();
+  for (final x in claims.where((r) => r.status == Status.superseded)) {
+    final ownReplacement = claims.any(
+      (s) =>
+          s.assertedBy == x.assertedBy &&
+          s.baseClaimId == x.id &&
+          contestKey(s) == contestKey(x),
+    );
+    if (!ownReplacement) {
+      a2f.add(
+        'claim ${x.id} by ${x.assertedBy} superseded without a replacement '
+        'by the same asserter',
+      );
+    }
+  }
+  // A claim that arrives after a later claim of its own asserter already
+  // named it as base must never stand: one person must not compete with
+  // themselves through late arrival.
+  var lateChecked = 0;
+  for (final p in claims) {
+    final namedEarlier = claims.any(
+      (s) =>
+          s.assertedBy == p.assertedBy &&
+          s.baseClaimId == p.id &&
+          contestKey(s) == contestKey(p) &&
+          s.seq! < p.seq!,
+    );
+    if (!namedEarlier) continue;
+    lateChecked++;
+    if (p.status != Status.superseded) {
+      a2f.add(
+        'late claim ${p.id} by ${p.assertedBy} stands beside its own '
+        'replacement',
+      );
+    }
+  }
+  final byKey = <String, List<ClaimRow>>{};
+  for (final c in claims) {
+    (byKey[contestKey(c)!] ??= []).add(c);
+  }
+  var contested = 0, selfDiffer = 0;
+  for (final e in byKey.entries) {
+    final asserters = {for (final c in e.value) c.assertedBy};
+    for (final who in asserters) {
+      final standing = e.value.where(
+        (c) => c.assertedBy == who && c.status == Status.active,
+      );
+      if (standing.isEmpty) {
+        a2f.add('${e.key}: account of $who no longer stands');
+      }
+      if (standing.length > 1) selfDiffer++;
+    }
+    final activeBy = {
+      for (final c in e.value)
+        if (c.status == Status.active) c.assertedBy,
+    };
+    if (activeBy.length > 1) contested++;
+  }
+  final serverRows = server.rows.toList();
+  if (renderView(serverRows) !=
+      renderView(serverRows.map((r) => r.withDeviceTime(0)))) {
+    a2f.add('the view depends on device clocks');
+  }
+
+  // ------------------------------------------------------------ A3
+  // Every merge m later undone by u is replayed: a fresh server receives
+  // every row in the same arrival order minus m and u, and its view is
+  // compared with the real view. Each pair is classified:
+  //
+  // - identical: the views match.
+  // - accepted-interfering (Finding 3): every row whose status differs
+  //   between the replay and a replay of the whole log is a merge or undo
+  //   row that touches one of m's two people and arrived strictly between
+  //   m and u, and putting those rows' real statuses back into the replay
+  //   reproduces the real view exactly.
+  // - cascade (Finding 3b): not accepted, but every row whose status
+  //   differs is in the pair's taint set, at least one seed row is itself
+  //   among the rows whose status differs, and putting all differing
+  //   statuses back reproduces the real view exactly. The taint set is
+  //   computed from the real arrival log. Seeds: merge or undo rows that
+  //   the server stored as conflicted while m stood (arrived strictly
+  //   between m and u) and that touch one of m's people, whatever the
+  //   reason for the refusal. Closure, in arrival order after the first
+  //   seed: a merge or undo row is tainted if it shares a person with an
+  //   already-tainted row, or if it is an undo of a tainted merge. The
+  //   closure follows shared people only; it does not prove that one row's
+  //   outcome caused another's. A claim row is never tainted, so any
+  //   claim-status difference is not cascade.
+  // - non-cascade: anything else, including a view difference with no
+  //   row-status difference. Only non-cascade pairs fail A3.
+  final arrival = [...serverRows]..sort((x, y) => x.seq!.compareTo(y.seq!));
+  FakeServer replayWithout(Set<String> drop) {
+    final s = FakeServer(mode: cfg.mode)..poisonActive = false;
+    for (final r in arrival) {
+      if (!drop.contains(r.id)) s.push([authored[r.id] ?? r]);
+    }
+    return s;
+  }
+
+  var replayed = 0, identical = 0, acceptedInterfering = 0;
+  var cascadePairs = 0, nonCascadePairs = 0;
+  final taintSizes = <int>[];
+  final full = renderView(serverRows);
+  final whole = replayWithout({});
+  if (renderView(whole.rows) != full) {
+    a3f.add('replaying the whole log does not reproduce the server view');
+  }
+  final byId = {for (final r in serverRows) r.id: r};
+  Set<String> people(ClaimRow r) => switch (r.kind) {
+    RowKind.merge => {r.subjectId, r.objectId!},
+    RowKind.unmerge =>
+      byId[r.subjectId]?.kind == RowKind.merge
+          ? people(byId[r.subjectId]!)
+          : {},
+    _ => {},
+  };
+  bool isEvent(ClaimRow r) =>
+      r.kind == RowKind.merge || r.kind == RowKind.unmerge;
+
+  /// Returns the taint set and, within it, the seed rows.
+  (Set<String>, Set<String>) taintFor(ClaimRow m, ClaimRow u) {
+    final ps = people(m);
+    final tainted = <String>{};
+    final seeds = <String>{};
+    final taintedPeople = <String>{};
+    for (final r in arrival) {
+      if (!isEvent(r) || r.id == m.id || r.id == u.id) continue;
+      final seed =
+          r.status == Status.conflicted &&
+          r.seq! > m.seq! &&
+          r.seq! < u.seq! &&
+          people(r).intersection(ps).isNotEmpty;
+      final follows =
+          tainted.isNotEmpty &&
+          (people(r).intersection(taintedPeople).isNotEmpty ||
+              (r.kind == RowKind.unmerge && tainted.contains(r.subjectId)));
+      if (seed) seeds.add(r.id);
+      if (seed || follows) {
+        tainted.add(r.id);
+        taintedPeople.addAll(people(r));
+      }
+    }
+    return (tainted, seeds);
+  }
+
+  String withStatuses(FakeServer cf, Map<String, String> real) => renderView(
+    cf.rows.map(
+      (r) => real.containsKey(r.id) ? r.withServer(status: real[r.id]!) : r,
+    ),
+  );
+
+  for (final u in serverRows.where(
+    (r) => r.kind == RowKind.unmerge && r.status == Status.effective,
+  )) {
+    final m = byId[u.subjectId]!;
+    replayed++;
+    final (taint, seeds) = taintFor(m, u);
+    taintSizes.add(taint.length);
+    final cf = replayWithout({m.id, u.id});
+    final without = renderView(cf.rows);
+    if (without == full) {
+      identical++;
+      continue;
+    }
+    final changed = [
+      for (final r in cf.rows)
+        if (whole[r.id]!.status != r.status) whole[r.id]!,
+    ];
+    final realStatus = {for (final r in changed) r.id: r.status};
+    final explained =
+        changed.isNotEmpty && withStatuses(cf, realStatus) == full;
+    final ps = people(m);
+    final interferingOnly = changed.every(
+      (r) =>
+          isEvent(r) &&
+          r.seq! > m.seq! &&
+          r.seq! < u.seq! &&
+          people(r).intersection(ps).isNotEmpty,
+    );
+    if (explained && interferingOnly) {
+      acceptedInterfering++;
+      continue;
+    }
+    final seedChanged = changed.any((r) => seeds.contains(r.id));
+    if (explained &&
+        seedChanged &&
+        changed.every((r) => taint.contains(r.id))) {
+      cascadePairs++;
+      continue;
+    }
+    nonCascadePairs++;
+    a3f.add(
+      'non-cascade: merge ${m.id} plus undo (seq ${m.seq}..${u.seq}) left a '
+      'trace (${changed.length} status changes, '
+      '${changed.where((r) => r.isClaim).length} on claims, '
+      'explained: $explained, seed changed: $seedChanged; changed: ${[for (final r in changed) '${r.kind.name}@${r.seq}'
+            '${r.seq! > m.seq! && r.seq! < u.seq! ? '[in' : '[out'}'
+            '${people(r).intersection(ps).isNotEmpty ? ',touches' : ',other'}'
+            '${taint.contains(r.id) ? ',tainted]' : ',untainted]'}'
+            ' ${r.status}->${cf[r.id]!.status}'].join(' ')}): '
+      '${firstDiff(without, full)}',
+    );
+  }
+
+  for (final d in devices) {
+    await d.close();
+  }
+  res.stats.addAll({
+    'ops': hist,
+    'rows': serverRows.length,
+    'claims': claims.length,
+    'superseded': server.supersessions,
+    'lateBase': server.lateBaseSupersessions,
+    'lateBaseViaInactive': server.lateBaseViaInactive,
+    'lateArrivalsChecked': lateChecked,
+    'staleBase': server.staleBase,
+    'ownReplaceKeptByContest': server.ownReplaceKeptByContest,
+    'contestedKeys': contested,
+    'selfDifferKeys': selfDiffer,
+    'conflictedMerges': server.conflictedMerges,
+    'undoPairsReplayed': replayed,
+    'undoPairsIdentical': identical,
+    'undoPairsAcceptedInterfering': acceptedInterfering,
+    'undoPairsCascade': cascadePairs,
+    'undoPairsNonCascade': nonCascadePairs,
+    'taintMin': taintSizes.isEmpty ? 0 : taintSizes.reduce(min),
+    'taintMax': taintSizes.isEmpty ? 0 : taintSizes.reduce(max),
+    'taintMean': taintSizes.isEmpty
+        ? '0'
+        : (taintSizes.reduce((a, b) => a + b) / taintSizes.length)
+              .toStringAsFixed(1),
+    'syncs': syncs,
+    'toggles': toggles,
+    'midPushDrops': nets.fold<int>(0, (s, n) => s + n.midPushDrops),
+    'duplicatePushes': nets.fold<int>(0, (s, n) => s + n.duplicatePushes),
+    'pullDrops': nets.fold<int>(0, (s, n) => s + n.pullDrops),
+    'duplicateAcks': server.duplicateAcks,
+    'poisonFailures': server.poisonFailures,
+    'ms': watch.elapsedMilliseconds,
+  });
+  return res;
+}

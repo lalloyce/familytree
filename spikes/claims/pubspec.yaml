@@ -1,0 +1,13 @@
+name: claims_spike
+description: Spike 2, append-only claims and custom sync cost. Throwaway.
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  drift: any
+  sqlite3: any
+
+dev_dependencies:
+  test: any

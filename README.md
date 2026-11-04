@@ -1,126 +1,56 @@
-# Family Tree Web App
+# Related
 
-## Overview
+Related is a cross-platform app (Flutter) for relatives to pool oral family history. Each person records their own household: houses, wives, children, and people the family has forgotten. They invite only relatives they personally know. Where accounts disagree, the app keeps both and shows who said what and on what basis.
 
-This Family Tree Web App allows users to register, log in, and manage their family tree. The app uses MongoDB for data storage, Express for the backend, and React for the frontend. The app is deployed on Vercel.
+The design is written down in [docs/2026-11-03-lineage-app-design.md](docs/2026-11-03-lineage-app-design.md). This project is built in the open: design, plan, spike results and open questions are all in [docs/](docs/).
 
-## Features
+## Status
 
-- User registration and login
-- Add family members
-- View family tree
-- Secure access with JWT authentication
+Early. There is no release and no server.
 
-## Prerequisites
+- **Phase 0 (done):** five spikes in [spikes/](spikes/) that test the risky ideas (claims and merging, tree layout at scale, invites, quiet-link leaks, encrypted storage), written up in [docs/spike-results.md](docs/spike-results.md). Numbers measured on a laptop are labelled as such. Measurements on a weak phone are not done yet.
+- **Milestone 1 (done):** a local-only app in [app/](app/) with a Drift (SQLite) database, append-only claims, a spoken-chain view, a house view and first-run entry of your own household.
+- **Next:** milestones M2 to M6 (accounts, sync, invites, quiet links, merge and disputes, a pilot) are planned after the spike results have been reviewed. See [docs/NOTES.md](docs/NOTES.md) for the current state and open questions.
 
-- Node.js
-- MongoDB Atlas account
-- Vercel account
+The M1 database is not encrypted. Do not enter real family data you would not want read off the phone. Encryption comes later.
 
-## Installation
+## Repository layout
 
-### Backend
+| Path | What it holds |
+|---|---|
+| `app/` | The Flutter app (package `related`) and its tests |
+| `spikes/` | Phase 0 experiments, each with its own README |
+| `docs/` | Design, build plan, project notes, spike results, paper-test script |
+| `scripts/` | Shell helpers for local toolchain setup |
 
-1. Clone the repository:
+## Getting started
 
-    ```bash
-    git clone https://github.com/lalloyce/familytree.git
-    cd familytree/server
-    ```
+You need the Flutter SDK (the app is developed on 3.47.9, stable; `app/pubspec.yaml` requires Dart `^3.13.7`). The Android toolchain is only needed to run on an Android device or emulator.
 
-2. Install dependencies:
+```sh
+cd app
+flutter pub get
+flutter analyze
+flutter test
+```
 
-    ```bash
-    npm install
-    ```
+`scripts/env.sh` sets `JAVA_HOME`, `ANDROID_HOME` and `PATH` for one shell, using Homebrew locations on macOS. Copy it and change the paths for your machine; it does not edit any shell profile.
 
-3. Create a `.env` file in the `server` directory with the following content:
+The generated Drift file `app/lib/data/database.g.dart` is committed, so a fresh checkout compiles without running code generation. After changing a Drift table, run `dart run build_runner build` in `app/`.
 
-    ```env
-    PORT=5000
-    MONGODB_URI=your_mongodb_uri_here
-    JWT_SECRET=your_jwt_secret_here
-    ```
+## Privacy and data
 
-4. Start the server:
-
-    ```bash
-    npm run dev
-    ```
-
-### Frontend
-
-1. Navigate to the `client` directory:
-
-    ```bash
-    cd ../client
-    ```
-
-2. Install dependencies:
-
-    ```bash
-    npm install
-    ```
-
-3. Start the React app:
-
-    ```bash
-    npm start
-    ```
-
-## Directory Structure
-
-familytree/
-├── client/ # React frontend
-│ ├── public/
-│ ├── src/
-│ ├── package.json
-│ ├── README.md
-│ └── ...
-├── server/ # Express backend
-│ ├── controllers/
-│ ├── middleware/
-│ ├── models/
-│ ├── routes/
-│ ├── index.js
-│ ├── .env
-│ └── ...
-├── README.md
-└── ...
-
-markdown
-Copy code
-
-## Usage
-
-1. Register a new user.
-2. Log in with the registered user credentials.
-3. Add family members by providing details like name, gender, year of birth, parent ID, and spouse ID.
-4. View the family tree.
-
-## Deployment
-
-### Backend
-
-1. Create a new project on Vercel and select the `server` directory as the root directory.
-2. Set the environment variables (`MONGODB_URI`, `JWT_SECRET`, `PORT`) in Vercel.
-3. Deploy the project.
-
-### Frontend
-
-1. Create a new project on Vercel and select the `client` directory as the root directory.
-2. Add a proxy in your `client/package.json` to forward API requests to your backend:
-
-    ```json
-    "proxy": "https://your-backend-url.vercel.app"
-    ```
-
-3. Deploy the project.
+- No real person appears in this repository. Names in tests, fixtures, docs and examples are invented.
+- Real family data, credentials, signing keys and environment configuration never go in the repository. See [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md).
 
 ## Contributing
 
-Feel free to open issues or submit pull requests if you have suggestions or improvements.
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first, especially the rules about data.
+
+## History
+
+An earlier Node and React family-tree prototype lived in this repository. It was removed when this project replaced it; it remains in the git history.
 
 ## License
 
-This project is licensed under the MIT License.
+Related is licensed under the [GNU Affero General Public License v3.0](LICENSE). If you run a modified version as a network service, the license requires you to offer its source to the people who use it.
